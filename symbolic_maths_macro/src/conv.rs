@@ -133,8 +133,8 @@ fn expr_to_sexpr(expr: &Expr, params: &HashSet<String>) -> Result<String> {
         Expr::Binary(binary) => convert_binary(binary, params),
         Expr::MethodCall(method_call) => convert_method_call(method_call, params),
         Expr::Call(call) => convert_function_call(call, params),
-        Expr::Paren(paren) => expr_to_sexpr(&paren.expr, params), /* Handle parenthesized
-                                                                    * expressions */
+        Expr::Paren(paren) => expr_to_sexpr(&paren.expr, params), /* Handle parenthesized */
+        // expressions
         _ => {
             use quote::ToTokens;
             let mut ts = proc_macro2::TokenStream::new();
@@ -191,18 +191,6 @@ pub fn tokenize_sexpr(s: &str) -> Vec<String> {
     out.into_iter().filter(|t| !t.is_empty()).collect()
 }
 
-fn parse_atom(token: &str) -> proc_macro2::TokenStream {
-    use quote::quote;
-
-    if token.parse::<f64>().is_ok() {
-        let lit = syn::LitFloat::new(&format!("{}f64", token), Span::call_site());
-        quote! { #lit }
-    } else {
-        let ident = syn::Ident::new(token, Span::call_site());
-        quote! { #ident }
-    }
-}
-
 fn parse_binary_op(
     op: &str,
     tokens: &[String],
@@ -246,25 +234,6 @@ fn parse_unary_op(
     };
 
     Ok((result, p1 + 1))
-}
-
-fn parse_pow(tokens: &[String], pos: usize) -> Result<(proc_macro2::TokenStream, usize)> {
-    use quote::quote;
-
-    let (base, p1) = sexpr_to_tokens(tokens, pos + 2)?;
-    let (exp, p2) = sexpr_to_tokens(tokens, p1)?;
-
-    if p2 >= tokens.len() || tokens[p2] != ")" {
-        return Err(anyhow!("expected ) after pow expression"));
-    }
-
-    let exp_str = exp.to_string();
-    let n: i32 = exp_str
-        .trim()
-        .parse()
-        .map_err(|_| anyhow!("non-const exponent in pow: {}", exp_str))?;
-
-    Ok((quote! { (#base).powi(#n) }, p2 + 1))
 }
 
 fn parse_function_call(
@@ -355,6 +324,42 @@ pub fn rec_expr_to_tokens(
     }
 
     Ok(ts)
+}
+
+fn parse_atom(token: &str) -> proc_macro2::TokenStream {
+    use quote::quote;
+
+    if token.parse::<f64>().is_ok() {
+        // Generate f32 literals to match function signatures
+        let lit = syn::LitFloat::new(&format!("{}f32", token), Span::call_site());
+        quote! { #lit }
+    } else {
+        let ident = syn::Ident::new(token, Span::call_site());
+        quote! { #ident }
+    }
+}
+
+fn parse_pow(tokens: &[String], pos: usize) -> Result<(proc_macro2::TokenStream, usize)> {
+    use quote::quote;
+
+    let (base, p1) = sexpr_to_tokens(tokens, pos + 2)?;
+    let (exp, p2) = sexpr_to_tokens(tokens, p1)?;
+
+    if p2 >= tokens.len() || tokens[p2] != ")" {
+        return Err(anyhow!("expected ) after pow expression"));
+    }
+
+    // Extract just the numeric part, strip type suffix like "f32" or "f64"
+    let exp_str = exp.to_string();
+    let numeric_part = exp_str
+        .trim_end_matches("f32")
+        .trim_end_matches("f64")
+        .trim();
+    let n: i32 = numeric_part
+        .parse()
+        .map_err(|_| anyhow!("non-const exponent in pow: {}", exp_str))?;
+
+    Ok((quote! { (#base).powi(#n) }, p2 + 1))
 }
 
 // ============================================================================
@@ -574,7 +579,7 @@ mod tests {
     #[test]
     fn test_parse_atom_number() {
         let ts = parse_atom("42");
-        assert_eq!(ts.to_string(), "42f64");
+        assert_eq!(ts.to_string(), "42f32");
     }
 
     #[test]
@@ -592,7 +597,7 @@ mod tests {
         let tokens = vec!["42".to_string()];
         let (ts, pos) = sexpr_to_tokens(&tokens, 0).unwrap();
         assert_eq!(pos, 1);
-        assert_eq!(ts.to_string(), "42f64");
+        assert_eq!(ts.to_string(), "42f32");
     }
 
     #[test]
