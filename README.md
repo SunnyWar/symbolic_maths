@@ -1,109 +1,177 @@
 # symbolic_maths
 
-A small Rust workspace demonstrating a proc‑macro that converts numeric expressions into an e‑graph, simplifies them with **egg**, and emits optimized Rust code. Includes a proc‑macro crate and an example runtime that shows how to use the `#[sym_math]` attribute.
+**Automatically simplify mathematical expressions at compile time.**
+
+A Rust proc-macro that uses symbolic mathematics (via the [egg](https://egraphs-good.github.io/) library) to simplify your numeric expressions before they run, giving you cleaner code and potentially better performance.
 
 ---
 
-## Quickstart
+## Why use this?
 
-**Prerequisites**
+Mathematical identities like `sin²(x) + cos²(x) = 1` are always true, but writing them explicitly in code clutters your logic and wastes CPU cycles. This macro:
 
-- Rust toolchain installed via `rustup` (stable).
-
-**Build and run**
-
-```bash
-# from repository root
-cargo build -p symbolic_maths
-cargo run -p example_runtime
-```
-
-**Clean build**
-
-```bash
-cargo clean
-cargo build
-```
+- **Simplifies expressions automatically** - Write natural mathematical code, get optimized runtime code
+- **Catches errors early** - Mathematical simplifications happen at compile time
+- **Makes code clearer** - Express your intent mathematically without worrying about optimization
 
 ---
 
-## Usage
+## Example
 
-**Annotate a function**
+**Without the macro:**
+```rust
+fn compute(x: f32) -> f32 {
+    2.0 * x + x.sin().powi(2) + x.cos().powi(2)
+}
+// Runtime: Computes sin(x), cos(x), squares both, adds them → wastes cycles
+```
 
-Apply the attribute to a single‑expression function. The macro expects a single expression body without statements or a trailing semicolon.
+**With the macro:**
+```rust
+#[sym_math]
+fn compute(x: f32) -> f32 {
+    2.0 * x + x.sin().powi(2) + x.cos().powi(2)
+}
+// Compiles to: 2.0 * x + 1.0
+// The macro recognized sin²(x) + cos²(x) = 1 and simplified it!
+```
 
+**Result:** The function runs faster and the generated code is cleaner.
+
+---
+
+## Quick Start
+
+**1. Add to your `Cargo.toml`:**
+```toml
+[dependencies]
+symbolic_maths = { path = "../symbolic_maths_macro" }
+```
+
+**2. Use the macro:**
 ```rust
 use symbolic_maths::sym_math;
 
 #[sym_math]
-pub fn A(x: f32) -> f32 {
-    x * x.sin() * x.sin() + x.cos() * x.cos()
+fn my_function(x: f32) -> f32 {
+    x.sin().powi(2) + x.cos().powi(2)  // Simplifies to: 1.0
 }
 ```
 
-**Notes**
-
-- The macro replaces the function body at compile time with the simplified expression.
-- Supported expression forms include numeric literals, variables, binary ops `+` and `*`, unary negation, method calls `sin`, `cos`, `powi`, and simple function calls. Unsupported forms will produce a compile error with diagnostics.
-
----
-
-## How it works
-
-**Pipeline**
-
-1. **Parse** the annotated function using `syn`.  
-2. **Convert** the `syn::Expr` into a compact s‑expression suitable for `egg` (`conv::to_rec_expr`).  
-3. **Rewrite** the expression using e‑graph rules (`rewrite::simplify_rec_expr`).  
-4. **Render** the simplified `RecExpr` back into Rust tokens (`conv::rec_expr_to_tokens`) and replace the function body.
-
-**Key modules**
-
-- `lib.rs` — proc‑macro entry point and error wrapper.  
-- `conv.rs` — conversion between `syn::Expr` and s‑expressions and rendering back to Rust.  
-- `rewrite.rs` — e‑graph rewrite rules and simplification pipeline.
+**3. Build and run:**
+```bash
+cargo build
+cargo run
+```
 
 ---
 
-## Development notes and troubleshooting
+## What gets simplified?
 
-**Common issues**
+Currently supports:
+- **Trigonometric identities**: `sin²(x) + cos²(x) → 1`
+- **Basic algebra**: `x * 1 → x`, `x + 0 → x`, `x^1 → x`
 
-- **Dependency name mismatch**: Ensure `example_runtime/Cargo.toml` references the proc‑macro package name, for example:
-  ```toml
-  [dependencies]
-  symbolic_maths = { path = "../symbolic_maths_macro" }
-  ```
-  Or use an alias if the package name differs:
-  ```toml
-  symbolic_maths_macro = { package = "symbolic_maths", path = "../symbolic_maths_macro" }
-  ```
-
-- **Single expression requirement**: The macro requires a single expression body. If your function has statements or a trailing semicolon, the macro will emit a compile error.
-
-- **Macro panics**: The proc‑macro wraps internal errors and emits `compile_error!` with diagnostics. If you see `custom attribute panicked`, build the macro crate directly to inspect errors:
-  ```bash
-  cargo build -p symbolic_maths
-  ```
-
-- **Unsupported calls**: If the converter reports unsupported calls (for example `unsupported call B`), extend `conv::expr_to_sexpr` to convert `Expr::Call` into s‑expressions and ensure `sexpr_to_tokens` renders generic calls back to Rust.
-
-**Debugging tips**
-
-- Add defensive checks in `conv.rs` to avoid panics and produce helpful error messages.  
-- Temporarily emit intermediate s‑expressions as compile errors to inspect what the macro produced.
+Supports these expression types:
+- Numeric literals: `42`, `3.14`
+- Variables: function parameters
+- Binary operations: `+`, `*`, `-`
+- Method calls: `.sin()`, `.cos()`, `.powi(n)`
+- Function calls: `foo(x)`, `math::bar(y)`
 
 ---
 
-## Contributing and License
+## Requirements
 
-**Contributing**
+- **Single expression body**: Function must be a single expression (no statements)
+- **No trailing semicolon**: Write `x + 1` not `x + 1;`
 
-- Open issues for bugs or feature requests.  
-- Send focused pull requests with tests where applicable.  
-- Keep proc‑macro changes small and include clear error messages.
+**Example of correct usage:**
+```rust
+#[sym_math]
+fn good(x: f32) -> f32 {
+    x.sin().powi(2) + x.cos().powi(2)  // ✓ Single expression
+}
+```
+
+**Example of incorrect usage:**
+```rust
+#[sym_math]
+fn bad(x: f32) -> f32 {
+    let y = x * 2.0;  // ✗ Has statements
+    y + 1.0
+}
+```
+
+---
+
+## How it works (brief)
+
+1. **Parse**: Reads your function at compile time
+2. **Simplify**: Uses symbolic math (e-graphs via egg) to find the simplest equivalent form
+3. **Generate**: Replaces your function body with the optimized version
+
+All of this happens during compilation - zero runtime overhead!
+
+---
+
+## Testing
+```bash
+# Run all tests
+cargo test
+
+# Run integration tests
+cargo test --test integration_tests
+
+# Run example
+cargo run -p example_runtime
+```
+
+---
+
+## Future Work
+
+Potential enhancements to make the macro more powerful and broadly applicable:
+
+**More mathematical identities:**
+- Double angle formulas: `sin(2x) = 2·sin(x)·cos(x)`
+- Pythagorean variants: `1 + tan²(x) = sec²(x)`
+- Sum/difference formulas for trig functions
+- Logarithm rules: `log(a·b) = log(a) + log(b)`
+- Exponent rules: `x^a · x^b = x^(a+b)`
+
+**Algebraic simplifications:**
+- Common factor extraction: `a·x + a·y → a·(x + y)`
+- Polynomial simplification: `(x + 1)² → x² + 2x + 1`
+- Fraction simplification
+- Constant folding for complex expressions
+
+**Expression support:**
+- Multi-statement functions (analyze final expression)
+- Control flow (if/else, match) with symbolic conditions
+- Loops with compile-time known bounds
+- Array/vector operations
+
+**Advanced features:**
+- User-defined rewrite rules via attributes
+- Optimization hints (speed vs. numerical stability)
+- Configurable simplification aggressiveness
+- Support for integer and generic numeric types
+- Partial evaluation with known constant inputs
+
+**Developer experience:**
+- Better error messages with suggestions
+- Show simplified result in compiler output or documentation
+- IDE integration for live simplification preview
+- Benchmarking helpers to measure actual performance gains
+
+**Performance:**
+- Parallel simplification for large expressions
+- Caching of simplified expressions across builds
+- Profile-guided optimization based on runtime patterns
+
+---
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+MIT License - see [LICENSE](LICENSE) file for details.
