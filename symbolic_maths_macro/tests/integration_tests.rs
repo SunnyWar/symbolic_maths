@@ -1,3 +1,4 @@
+use core::f32;
 use symbolic_maths::sym_math;
 
 // ============================================================================
@@ -123,5 +124,5 @@ fn test_identity(x: f32) -> f32 {
 #[test]
 fn test_identity_function() {
     assert_eq!(test_identity(5.0), 5.0);
-    assert_eq!(test_identity(-3.14), -3.14);
+    assert_eq!(test_identity(f32::consts::PI), f32::consts::PI);
 }
