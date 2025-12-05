@@ -3,5 +3,6 @@
   "rust-analyzer.cargo.loadOutDirsFromCheck": true,
   "rust-analyzer.checkOnSave.command": "clippy",
   "rust-analyzer.cargo.features": [],
-  "rust-analyzer.cargo.target": null
+  "rust-analyzer.cargo.target": null,
+  "rust-analyzer.cargo.buildScripts.enable": true
 }

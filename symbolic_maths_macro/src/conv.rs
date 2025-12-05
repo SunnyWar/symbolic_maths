@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use egg::RecExpr;
 use egg::SymbolLang;
 use proc_macro2::Span;
+use std::collections::HashSet;
 use syn::Expr;
 use syn::ExprBinary;
 use syn::ExprCall;
@@ -16,7 +17,7 @@ use syn::UnOp;
 /// Convert a syn::Expr into an s-expression string for
 /// egg::RecExpr<SymbolLang>. We keep the s-expr small: operators are +, *, pow,
 /// sin, cos, num, var
-fn expr_to_sexpr(expr: &Expr) -> Result<String> {
+fn expr_to_sexpr(expr: &Expr, params: &HashSet<String>) -> Result<String> {
     match expr {
         Expr::Lit(ExprLit {
             lit: Lit::Float(lf),
@@ -33,11 +34,13 @@ fn expr_to_sexpr(expr: &Expr) -> Result<String> {
         }
         Expr::Path(ExprPath { path, .. }) => {
             let s = path.segments.last().unwrap().ident.to_string();
+            // If it's a parameter, just use the identifier directly
+            // (egg pattern variables match any identifier)
             Ok(s)
         }
         Expr::Unary(u) => {
             if let UnOp::Neg(_) = u.op {
-                let inner = expr_to_sexpr(&u.expr)?;
+                let inner = expr_to_sexpr(&u.expr, params)?;
                 Ok(format!("(* -1 {})", inner))
             } else {
                 Err(anyhow!("unsupported unary op"))
@@ -46,8 +49,8 @@ fn expr_to_sexpr(expr: &Expr) -> Result<String> {
         Expr::Binary(ExprBinary {
             left, op, right, ..
         }) => {
-            let l = expr_to_sexpr(left)?;
-            let r = expr_to_sexpr(right)?;
+            let l = expr_to_sexpr(left, params)?;
+            let r = expr_to_sexpr(right, params)?;
             match op {
                 syn::BinOp::Add(_) => Ok(format!("(+ {} {})", l, r)),
                 syn::BinOp::Mul(_) => Ok(format!("(* {} {})", l, r)),
@@ -61,7 +64,7 @@ fn expr_to_sexpr(expr: &Expr) -> Result<String> {
             args,
             ..
         }) => {
-            let recv = expr_to_sexpr(receiver)?;
+            let recv = expr_to_sexpr(receiver, params)?;
             let m = method.to_string();
             if m == "sin" && args.is_empty() {
                 Ok(format!("(sin {})", recv))
@@ -82,7 +85,7 @@ fn expr_to_sexpr(expr: &Expr) -> Result<String> {
             }
         }
         Expr::Call(ExprCall { func, args, .. }) => {
-            // If the call is a simple path like `B(...)` or `m::B(...)`
+            // If the call is a simple path like `b(...)` or `m::b(...)`
             if let Expr::Path(ExprPath { path, .. }) = &**func {
                 // Use the full path token stream so module paths are preserved
                 let fname = {
@@ -95,7 +98,7 @@ fn expr_to_sexpr(expr: &Expr) -> Result<String> {
                 // convert each arg to s-expr
                 let mut arg_sexprs = Vec::new();
                 for a in args.iter() {
-                    arg_sexprs.push(expr_to_sexpr(a)?);
+                    arg_sexprs.push(expr_to_sexpr(a, params)?);
                 }
 
                 if arg_sexprs.is_empty() {
@@ -123,8 +126,20 @@ fn expr_to_sexpr(expr: &Expr) -> Result<String> {
 }
 
 /// Top-level: convert syn::Expr -> RecExpr<SymbolLang>
-pub fn to_rec_expr(expr: &Expr) -> Result<RecExpr<SymbolLang>> {
-    let s = expr_to_sexpr(expr)?;
+pub fn to_rec_expr(expr: &Expr, sig: &syn::Signature) -> Result<RecExpr<SymbolLang>> {
+    // Extract parameter names from the function signature
+    let mut params = HashSet::new();
+    for input in &sig.inputs {
+        if let syn::FnArg::Typed(pat_type) = input
+            && let syn::Pat::Ident(pat_ident) = &*pat_type.pat
+        {
+            params.insert(pat_ident.ident.to_string());
+        }
+    }
+
+    let s = expr_to_sexpr(expr, &params)?;
+    eprintln!("DEBUG: s-expression before parsing: {:?}", s);
+
     // Wrap top-level in nothing; RecExpr::from_str expects an s-expression
     // If the expression is a bare number or var, it's fine; otherwise it's already
     // an s-expr. egg::RecExpr implements FromStr for SymbolLang.
@@ -146,16 +161,14 @@ pub fn rec_expr_to_tokens(
 
     // Check for empty or whitespace-only strings before tokenizing
     if s.trim().is_empty() {
-        return Err(anyhow!(
-            "RecExpr produced empty or whitespace-only string"
-        ));
+        return Err(anyhow!("RecExpr produced empty or whitespace-only string"));
     }
 
     // Tokenize and guard against empty output
     let tokens = tokenize_sexpr(&s);
     if tokens.is_empty() {
         return Err(anyhow!(
-            "empty s-expression produced by RecExpr; s = {:?}",
+            "empty token list after tokenizing s-expression; original s = {:?}",
             s
         ));
     }
@@ -301,7 +314,7 @@ fn sexpr_to_tokens(tokens: &[String], pos: usize) -> Result<(proc_macro2::TokenS
                     ));
                 }
 
-                // Try to parse operator token as a path (supports m::B). Fallback to Ident.
+                // Try to parse operator token as a path (supports m::b). Fallback to Ident.
                 let func_ts = if syn::parse_str::<syn::Path>(other).is_ok() {
                     let path: syn::Path = syn::parse_str(other).unwrap();
                     quote! { #path }
