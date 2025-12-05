@@ -14,180 +14,157 @@ use syn::ExprPath;
 use syn::Lit;
 use syn::UnOp;
 
-/// Convert a syn::Expr into an s-expression string for
-/// egg::RecExpr<SymbolLang>. We keep the s-expr small: operators are +, *, pow,
-/// sin, cos, num, var
-fn expr_to_sexpr(expr: &Expr, params: &HashSet<String>) -> Result<String> {
-    match expr {
-        Expr::Lit(ExprLit {
-            lit: Lit::Float(lf),
-            ..
-        }) => {
+// ============================================================================
+// STEP 1: Extract function parameters from signature
+// ============================================================================
+
+/// Extract parameter names from a function signature
+pub fn extract_param_names(sig: &syn::Signature) -> HashSet<String> {
+    let mut params = HashSet::new();
+    for input in &sig.inputs {
+        if let syn::FnArg::Typed(pat_type) = input {
+            if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
+                params.insert(pat_ident.ident.to_string());
+            }
+        }
+    }
+    params
+}
+
+// ============================================================================
+// STEP 2: Convert individual expression types to s-expressions
+// ============================================================================
+
+fn convert_literal(lit: &Lit) -> Result<String> {
+    match lit {
+        Lit::Float(lf) => {
             let v: f64 = lf.base10_parse()?;
             Ok(format!("{}", v))
         }
-        Expr::Lit(ExprLit {
-            lit: Lit::Int(li), ..
-        }) => {
+        Lit::Int(li) => {
             let v: f64 = li.base10_parse()?;
             Ok(format!("{}", v))
         }
-        Expr::Path(ExprPath { path, .. }) => {
-            let s = path.segments.last().unwrap().ident.to_string();
-            // If it's a parameter, just use the identifier directly
-            // (egg pattern variables match any identifier)
-            Ok(s)
-        }
-        Expr::Unary(u) => {
-            if let UnOp::Neg(_) = u.op {
-                let inner = expr_to_sexpr(&u.expr, params)?;
-                Ok(format!("(* -1 {})", inner))
-            } else {
-                Err(anyhow!("unsupported unary op"))
-            }
-        }
-        Expr::Binary(ExprBinary {
-            left, op, right, ..
-        }) => {
-            let l = expr_to_sexpr(left, params)?;
-            let r = expr_to_sexpr(right, params)?;
-            match op {
-                syn::BinOp::Add(_) => Ok(format!("(+ {} {})", l, r)),
-                syn::BinOp::Mul(_) => Ok(format!("(* {} {})", l, r)),
-                syn::BinOp::Sub(_) => Ok(format!("(+ {} (* -1 {}))", l, r)),
-                _ => Err(anyhow!("unsupported binary op")),
-            }
-        }
-        Expr::MethodCall(ExprMethodCall {
-            receiver,
-            method,
-            args,
-            ..
-        }) => {
-            let recv = expr_to_sexpr(receiver, params)?;
-            let m = method.to_string();
-            if m == "sin" && args.is_empty() {
-                Ok(format!("(sin {})", recv))
-            } else if m == "cos" && args.is_empty() {
-                Ok(format!("(cos {})", recv))
-            } else if m == "powi" && args.len() == 1 {
-                if let Expr::Lit(ExprLit {
-                    lit: Lit::Int(li), ..
-                }) = &args[0]
-                {
-                    let n: i64 = li.base10_parse()?;
-                    Ok(format!("(pow {} {})", recv, n))
-                } else {
-                    Err(anyhow!("powi arg must be integer literal"))
-                }
-            } else {
-                Err(anyhow!("unsupported method call {}", m))
-            }
-        }
-        Expr::Call(ExprCall { func, args, .. }) => {
-            // If the call is a simple path like `b(...)` or `m::b(...)`
-            if let Expr::Path(ExprPath { path, .. }) = &**func {
-                // Use the full path token stream so module paths are preserved
-                let fname = {
-                    use quote::ToTokens;
-                    let mut ts = proc_macro2::TokenStream::new();
-                    path.to_tokens(&mut ts);
-                    ts.to_string()
-                };
+        _ => Err(anyhow!("unsupported literal type")),
+    }
+}
 
-                // convert each arg to s-expr
-                let mut arg_sexprs = Vec::new();
-                for a in args.iter() {
-                    arg_sexprs.push(expr_to_sexpr(a, params)?);
-                }
+fn convert_path(path: &syn::Path, _params: &HashSet<String>) -> Result<String> {
+    let s = path.segments.last().unwrap().ident.to_string();
+    Ok(s)
+}
 
-                if arg_sexprs.is_empty() {
-                    // zero-arg call -> treat as atom (bare path)
-                    Ok(fname)
-                } else {
-                    // produce "(fname arg1 arg2 ...)"
-                    Ok(format!("({} {})", fname, arg_sexprs.join(" ")))
-                }
-            } else {
-                Err(anyhow!("unsupported call form"))
-            }
+fn convert_unary(u: &syn::ExprUnary, params: &HashSet<String>) -> Result<String> {
+    if let UnOp::Neg(_) = u.op {
+        let inner = expr_to_sexpr(&u.expr, params)?;
+        Ok(format!("(* -1 {})", inner))
+    } else {
+        Err(anyhow!("unsupported unary op"))
+    }
+}
+
+fn convert_binary(binary: &ExprBinary, params: &HashSet<String>) -> Result<String> {
+    let l = expr_to_sexpr(&binary.left, params)?;
+    let r = expr_to_sexpr(&binary.right, params)?;
+    match binary.op {
+        syn::BinOp::Add(_) => Ok(format!("(+ {} {})", l, r)),
+        syn::BinOp::Mul(_) => Ok(format!("(* {} {})", l, r)),
+        syn::BinOp::Sub(_) => Ok(format!("(+ {} (* -1 {}))", l, r)),
+        _ => Err(anyhow!("unsupported binary op")),
+    }
+}
+
+fn convert_method_call(method_call: &ExprMethodCall, params: &HashSet<String>) -> Result<String> {
+    let recv = expr_to_sexpr(&method_call.receiver, params)?;
+    let m = method_call.method.to_string();
+
+    if m == "sin" && method_call.args.is_empty() {
+        Ok(format!("(sin {})", recv))
+    } else if m == "cos" && method_call.args.is_empty() {
+        Ok(format!("(cos {})", recv))
+    } else if m == "powi" && method_call.args.len() == 1 {
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Int(li), ..
+        }) = &method_call.args[0]
+        {
+            let n: i64 = li.base10_parse()?;
+            Ok(format!("(pow {} {})", recv, n))
+        } else {
+            Err(anyhow!("powi arg must be integer literal"))
         }
+    } else {
+        Err(anyhow!("unsupported method call: {}", m))
+    }
+}
+
+fn convert_function_call(call: &ExprCall, params: &HashSet<String>) -> Result<String> {
+    if let Expr::Path(ExprPath { path, .. }) = &*call.func {
+        let fname = {
+            use quote::ToTokens;
+            let mut ts = proc_macro2::TokenStream::new();
+            path.to_tokens(&mut ts);
+            ts.to_string()
+        };
+
+        let mut arg_sexprs = Vec::new();
+        for a in call.args.iter() {
+            arg_sexprs.push(expr_to_sexpr(a, params)?);
+        }
+
+        if arg_sexprs.is_empty() {
+            Ok(fname)
+        } else {
+            Ok(format!("({} {})", fname, arg_sexprs.join(" ")))
+        }
+    } else {
+        Err(anyhow!("unsupported call form"))
+    }
+}
+
+// ============================================================================
+// STEP 3: Main expression to s-expression converter
+// ============================================================================
+
+fn expr_to_sexpr(expr: &Expr, params: &HashSet<String>) -> Result<String> {
+    match expr {
+        Expr::Lit(ExprLit { lit, .. }) => convert_literal(lit),
+        Expr::Path(ExprPath { path, .. }) => convert_path(path, params),
+        Expr::Unary(u) => convert_unary(u, params),
+        Expr::Binary(binary) => convert_binary(binary, params),
+        Expr::MethodCall(method_call) => convert_method_call(method_call, params),
+        Expr::Call(call) => convert_function_call(call, params),
+        Expr::Paren(paren) => expr_to_sexpr(&paren.expr, params), /* Handle parenthesized
+                                                                    * expressions */
         _ => {
-            // syn::Expr doesn't implement Debug; stringify the tokens for diagnostics
-            let s = {
-                use quote::ToTokens;
-                let mut ts = proc_macro2::TokenStream::new();
-                expr.to_tokens(&mut ts);
-                ts.to_string()
-            };
-            Err(anyhow!("unsupported expression form: {}", s))
+            use quote::ToTokens;
+            let mut ts = proc_macro2::TokenStream::new();
+            expr.to_tokens(&mut ts);
+            Err(anyhow!("unsupported expression form: {}", ts))
         }
     }
 }
 
-/// Top-level: convert syn::Expr -> RecExpr<SymbolLang>
-pub fn to_rec_expr(expr: &Expr, sig: &syn::Signature) -> Result<RecExpr<SymbolLang>> {
-    // Extract parameter names from the function signature
-    let mut params = HashSet::new();
-    for input in &sig.inputs {
-        if let syn::FnArg::Typed(pat_type) = input
-            && let syn::Pat::Ident(pat_ident) = &*pat_type.pat
-        {
-            params.insert(pat_ident.ident.to_string());
-        }
-    }
+// ============================================================================
+// STEP 4: Top-level conversion function
+// ============================================================================
 
+pub fn to_rec_expr(expr: &Expr, sig: &syn::Signature) -> Result<RecExpr<SymbolLang>> {
+    let params = extract_param_names(sig);
     let s = expr_to_sexpr(expr, &params)?;
     eprintln!("DEBUG: s-expression before parsing: {:?}", s);
 
-    // Wrap top-level in nothing; RecExpr::from_str expects an s-expression
-    // If the expression is a bare number or var, it's fine; otherwise it's already
-    // an s-expr. egg::RecExpr implements FromStr for SymbolLang.
     let rec: RecExpr<SymbolLang> = s.parse()?;
     Ok(rec)
 }
 
-/// Convert a RecExpr<SymbolLang> into a TokenStream (Rust code) by rendering
-/// the root s-expr and mapping common patterns to Rust method calls.
-pub fn rec_expr_to_tokens(
-    rec: &RecExpr<SymbolLang>,
-    _sig: &syn::Signature,
-) -> Result<proc_macro2::TokenStream> {
-    // Render the RecExpr as an s-expression string for the root
-    let s = rec.to_string(); // e.g., "(+ (pow (sin x) 2) (pow (cos x) 2))" or "1"
+// ============================================================================
+// STEP 5: RecExpr to tokens conversion - broken into smaller functions
+// ============================================================================
 
-    eprintln!("DEBUG: RecExpr string representation: {:?}", s);
-    eprintln!("DEBUG: RecExpr nodes: {:?}", rec.as_ref());
-
-    // Check for empty or whitespace-only strings before tokenizing
-    if s.trim().is_empty() {
-        return Err(anyhow!("RecExpr produced empty or whitespace-only string"));
-    }
-
-    // Tokenize and guard against empty output
-    let tokens = tokenize_sexpr(&s);
-    if tokens.is_empty() {
-        return Err(anyhow!(
-            "empty token list after tokenizing s-expression; original s = {:?}",
-            s
-        ));
-    }
-
-    // Parse tokens into TokenStream
-    let (ts, pos) = sexpr_to_tokens(&tokens, 0)?;
-    if pos != tokens.len() {
-        return Err(anyhow!(
-            "trailing tokens after parse: pos={} tokens={:?}",
-            pos,
-            tokens
-        ));
-    }
-    Ok(ts)
-}
-
-fn tokenize_sexpr(s: &str) -> Vec<String> {
+pub fn tokenize_sexpr(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
+
     for ch in s.chars() {
         match ch {
             '(' | ')' => {
@@ -206,143 +183,440 @@ fn tokenize_sexpr(s: &str) -> Vec<String> {
             c => cur.push(c),
         }
     }
+
     if !cur.trim().is_empty() {
         out.push(cur.trim().to_string());
     }
-    // Remove any accidental empty tokens
+
     out.into_iter().filter(|t| !t.is_empty()).collect()
 }
 
-fn sexpr_to_tokens(tokens: &[String], pos: usize) -> Result<(proc_macro2::TokenStream, usize)> {
+fn parse_atom(token: &str) -> proc_macro2::TokenStream {
     use quote::quote;
 
+    if token.parse::<f64>().is_ok() {
+        let lit = syn::LitFloat::new(&format!("{}f64", token), Span::call_site());
+        quote! { #lit }
+    } else {
+        let ident = syn::Ident::new(token, Span::call_site());
+        quote! { #ident }
+    }
+}
+
+fn parse_binary_op(
+    op: &str,
+    tokens: &[String],
+    pos: usize,
+) -> Result<(proc_macro2::TokenStream, usize)> {
+    use quote::quote;
+
+    let (a, p1) = sexpr_to_tokens(tokens, pos + 2)?;
+    let (b, p2) = sexpr_to_tokens(tokens, p1)?;
+
+    if p2 >= tokens.len() || tokens[p2] != ")" {
+        return Err(anyhow!("expected ) after {} expression", op));
+    }
+
+    let result = match op {
+        "+" => quote! { (#a) + (#b) },
+        "*" => quote! { (#a) * (#b) },
+        _ => return Err(anyhow!("unknown binary op: {}", op)),
+    };
+
+    Ok((result, p2 + 1))
+}
+
+fn parse_unary_op(
+    op: &str,
+    tokens: &[String],
+    pos: usize,
+) -> Result<(proc_macro2::TokenStream, usize)> {
+    use quote::quote;
+
+    let (a, p1) = sexpr_to_tokens(tokens, pos + 2)?;
+
+    if p1 >= tokens.len() || tokens[p1] != ")" {
+        return Err(anyhow!("expected ) after {} expression", op));
+    }
+
+    let result = match op {
+        "sin" => quote! { (#a).sin() },
+        "cos" => quote! { (#a).cos() },
+        _ => return Err(anyhow!("unknown unary op: {}", op)),
+    };
+
+    Ok((result, p1 + 1))
+}
+
+fn parse_pow(tokens: &[String], pos: usize) -> Result<(proc_macro2::TokenStream, usize)> {
+    use quote::quote;
+
+    let (base, p1) = sexpr_to_tokens(tokens, pos + 2)?;
+    let (exp, p2) = sexpr_to_tokens(tokens, p1)?;
+
+    if p2 >= tokens.len() || tokens[p2] != ")" {
+        return Err(anyhow!("expected ) after pow expression"));
+    }
+
+    let exp_str = exp.to_string();
+    let n: i32 = exp_str
+        .trim()
+        .parse()
+        .map_err(|_| anyhow!("non-const exponent in pow: {}", exp_str))?;
+
+    Ok((quote! { (#base).powi(#n) }, p2 + 1))
+}
+
+fn parse_function_call(
+    fname: &str,
+    tokens: &[String],
+    pos: usize,
+) -> Result<(proc_macro2::TokenStream, usize)> {
+    use quote::quote;
+
+    let mut args_ts: Vec<proc_macro2::TokenStream> = Vec::new();
+    let mut p = pos + 2;
+
+    while p < tokens.len() && tokens[p] != ")" {
+        let (arg_ts, next) = sexpr_to_tokens(tokens, p)?;
+        args_ts.push(arg_ts);
+        p = next;
+    }
+
+    if p >= tokens.len() || tokens[p] != ")" {
+        return Err(anyhow!("expected ) after function call {}", fname));
+    }
+
+    let func_ts = if syn::parse_str::<syn::Path>(fname).is_ok() {
+        let path: syn::Path = syn::parse_str(fname).unwrap();
+        quote! { #path }
+    } else {
+        let ident = syn::Ident::new(fname, Span::call_site());
+        quote! { #ident }
+    };
+
+    let call = quote! { #func_ts ( #(#args_ts),* ) };
+    Ok((call, p + 1))
+}
+
+pub fn sexpr_to_tokens(tokens: &[String], pos: usize) -> Result<(proc_macro2::TokenStream, usize)> {
     if tokens.is_empty() {
         return Err(anyhow!("empty token slice"));
     }
     if pos >= tokens.len() {
-        return Err(anyhow!(
-            "position {} out of bounds for tokens {:?}",
-            pos,
-            tokens
-        ));
+        return Err(anyhow!("position {} out of bounds", pos));
     }
 
     let t = &tokens[pos];
+
     if t == "(" {
-        // ensure operator exists
         if pos + 1 >= tokens.len() {
             return Err(anyhow!(
-                "malformed s-expression: missing operator after '('; tokens = {:?}",
-                tokens
+                "malformed s-expression: missing operator after '('"
             ));
         }
+
         let op = &tokens[pos + 1];
+
         match op.as_str() {
-            "+" => {
-                let (a, p1) = sexpr_to_tokens(tokens, pos + 2)?;
-                let (b, p2) = sexpr_to_tokens(tokens, p1)?;
-                if p2 >= tokens.len() || tokens[p2] != ")" {
-                    return Err(anyhow!(
-                        "expected ) after + expression; tokens = {:?}",
-                        tokens
-                    ));
-                }
-                Ok((quote! { (#a) + (#b) }, p2 + 1))
-            }
-            "*" => {
-                let (a, p1) = sexpr_to_tokens(tokens, pos + 2)?;
-                let (b, p2) = sexpr_to_tokens(tokens, p1)?;
-                if p2 >= tokens.len() || tokens[p2] != ")" {
-                    return Err(anyhow!(
-                        "expected ) after * expression; tokens = {:?}",
-                        tokens
-                    ));
-                }
-                Ok((quote! { (#a) * (#b) }, p2 + 1))
-            }
-            "pow" => {
-                let (base, p1) = sexpr_to_tokens(tokens, pos + 2)?;
-                let (exp, p2) = sexpr_to_tokens(tokens, p1)?;
-                if p2 >= tokens.len() || tokens[p2] != ")" {
-                    return Err(anyhow!(
-                        "expected ) after pow expression; tokens = {:?}",
-                        tokens
-                    ));
-                }
-                // exp should be a literal number token; extract integer
-                let exp_str = exp.to_string();
-                let n: i32 = exp_str
-                    .trim()
-                    .parse()
-                    .map_err(|_| anyhow!("non-const exponent in pow: {}", exp_str))?;
-                Ok((quote! { (#base).powi(#n) }, p2 + 1))
-            }
-            "sin" => {
-                let (a, p1) = sexpr_to_tokens(tokens, pos + 2)?;
-                if p1 >= tokens.len() || tokens[p1] != ")" {
-                    return Err(anyhow!(
-                        "expected ) after sin expression; tokens = {:?}",
-                        tokens
-                    ));
-                }
-                Ok((quote! { (#a).sin() }, p1 + 1))
-            }
-            "cos" => {
-                let (a, p1) = sexpr_to_tokens(tokens, pos + 2)?;
-                if p1 >= tokens.len() || tokens[p1] != ")" {
-                    return Err(anyhow!(
-                        "expected ) after cos expression; tokens = {:?}",
-                        tokens
-                    ));
-                }
-                Ok((quote! { (#a).cos() }, p1 + 1))
-            }
-            other => {
-                // Generic function call: (fname arg1 arg2 ...)
-                let mut args_ts: Vec<proc_macro2::TokenStream> = Vec::new();
-                let mut p = pos + 2;
-                while p < tokens.len() && tokens[p] != ")" {
-                    let (arg_ts, next) = sexpr_to_tokens(tokens, p)?;
-                    args_ts.push(arg_ts);
-                    p = next;
-                }
-                if p >= tokens.len() || tokens[p] != ")" {
-                    return Err(anyhow!(
-                        "expected ) at position {}, tokens = {:?}",
-                        p,
-                        tokens
-                    ));
-                }
-
-                // Try to parse operator token as a path (supports m::b). Fallback to Ident.
-                let func_ts = if syn::parse_str::<syn::Path>(other).is_ok() {
-                    let path: syn::Path = syn::parse_str(other).unwrap();
-                    quote! { #path }
-                } else {
-                    let ident = syn::Ident::new(other, Span::call_site());
-                    quote! { #ident }
-                };
-
-                let call = quote! { #func_ts ( #(#args_ts),* ) };
-                Ok((call, p + 1))
-            }
+            "+" | "*" => parse_binary_op(op, tokens, pos),
+            "sin" | "cos" => parse_unary_op(op, tokens, pos),
+            "pow" => parse_pow(tokens, pos),
+            other => parse_function_call(other, tokens, pos),
         }
     } else if t == ")" {
-        Err(anyhow!(
-            "unexpected ) at position {} in tokens {:?}",
-            pos,
-            tokens
-        ))
+        Err(anyhow!("unexpected ) at position {}", pos))
     } else {
-        // atom: number or variable
-        if t.parse::<f64>().is_ok() {
-            // emit a float literal with f64 suffix
-            let lit = syn::LitFloat::new(&format!("{}f64", t), Span::call_site());
-            Ok((quote! { #lit }, pos + 1))
-        } else {
-            // variable/identifier: create an Ident (module paths are handled earlier)
-            let ident = syn::Ident::new(t, Span::call_site());
-            Ok((quote! { #ident }, pos + 1))
-        }
+        Ok((parse_atom(t), pos + 1))
+    }
+}
+
+pub fn rec_expr_to_tokens(
+    rec: &RecExpr<SymbolLang>,
+    _sig: &syn::Signature,
+) -> Result<proc_macro2::TokenStream> {
+    let s = rec.to_string();
+
+    eprintln!("DEBUG: RecExpr string representation: {:?}", s);
+    eprintln!("DEBUG: RecExpr nodes: {:?}", rec.as_ref());
+
+    if s.trim().is_empty() {
+        return Err(anyhow!("RecExpr produced empty string"));
+    }
+
+    let tokens = tokenize_sexpr(&s);
+    if tokens.is_empty() {
+        return Err(anyhow!("empty token list after tokenizing"));
+    }
+
+    let (ts, pos) = sexpr_to_tokens(&tokens, 0)?;
+    if pos != tokens.len() {
+        return Err(anyhow!("trailing tokens after parse"));
+    }
+
+    Ok(ts)
+}
+
+// ============================================================================
+// UNIT TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syn::parse_quote;
+
+    // ========================================================================
+    // Test extract_param_names
+    // ========================================================================
+
+    #[test]
+    fn test_extract_param_names_single() {
+        let sig: syn::Signature = parse_quote! { fn foo(x: f32) -> f32 };
+        let params = extract_param_names(&sig);
+        assert_eq!(params.len(), 1);
+        assert!(params.contains("x"));
+    }
+
+    #[test]
+    fn test_extract_param_names_multiple() {
+        let sig: syn::Signature = parse_quote! { fn foo(x: f32, y: f32, z: i32) -> f32 };
+        let params = extract_param_names(&sig);
+        assert_eq!(params.len(), 3);
+        assert!(params.contains("x"));
+        assert!(params.contains("y"));
+        assert!(params.contains("z"));
+    }
+
+    #[test]
+    fn test_extract_param_names_none() {
+        let sig: syn::Signature = parse_quote! { fn foo() -> f32 };
+        let params = extract_param_names(&sig);
+        assert_eq!(params.len(), 0);
+    }
+
+    // ========================================================================
+    // Test tokenize_sexpr
+    // ========================================================================
+
+    #[test]
+    fn test_tokenize_simple_number() {
+        let tokens = tokenize_sexpr("42");
+        assert_eq!(tokens, vec!["42"]);
+    }
+
+    #[test]
+    fn test_tokenize_simple_identifier() {
+        let tokens = tokenize_sexpr("x");
+        assert_eq!(tokens, vec!["x"]);
+    }
+
+    #[test]
+    fn test_tokenize_simple_sexpr() {
+        let tokens = tokenize_sexpr("(+ 1 2)");
+        assert_eq!(tokens, vec!["(", "+", "1", "2", ")"]);
+    }
+
+    #[test]
+    fn test_tokenize_nested_sexpr() {
+        let tokens = tokenize_sexpr("(+ (* 2 3) 4)");
+        assert_eq!(tokens, vec!["(", "+", "(", "*", "2", "3", ")", "4", ")"]);
+    }
+
+    #[test]
+    fn test_tokenize_trig() {
+        let tokens = tokenize_sexpr("(sin x)");
+        assert_eq!(tokens, vec!["(", "sin", "x", ")"]);
+    }
+
+    #[test]
+    fn test_tokenize_empty() {
+        let tokens = tokenize_sexpr("");
+        assert_eq!(tokens.len(), 0);
+    }
+
+    #[test]
+    fn test_tokenize_whitespace_only() {
+        let tokens = tokenize_sexpr("   ");
+        assert_eq!(tokens.len(), 0);
+    }
+
+    // ========================================================================
+    // Test convert_literal
+    // ========================================================================
+
+    #[test]
+    fn test_convert_int_literal() {
+        let lit: Lit = parse_quote! { 42 };
+        let result = convert_literal(&lit).unwrap();
+        assert_eq!(result, "42");
+    }
+
+    #[test]
+    fn test_convert_float_literal() {
+        let lit: Lit = parse_quote! { 3.14 };
+        let result = convert_literal(&lit).unwrap();
+        assert_eq!(result, "3.14");
+    }
+
+    // ========================================================================
+    // Test expr_to_sexpr for simple cases
+    // ========================================================================
+
+    #[test]
+    fn test_expr_to_sexpr_literal() {
+        let expr: Expr = parse_quote! { 42 };
+        let params = HashSet::new();
+        let result = expr_to_sexpr(&expr, &params).unwrap();
+        assert_eq!(result, "42");
+    }
+
+    #[test]
+    fn test_expr_to_sexpr_variable() {
+        let expr: Expr = parse_quote! { x };
+        let params = HashSet::new();
+        let result = expr_to_sexpr(&expr, &params).unwrap();
+        assert_eq!(result, "x");
+    }
+
+    #[test]
+    fn test_expr_to_sexpr_add() {
+        let expr: Expr = parse_quote! { x + y };
+        let params = HashSet::new();
+        let result = expr_to_sexpr(&expr, &params).unwrap();
+        assert_eq!(result, "(+ x y)");
+    }
+
+    #[test]
+    fn test_expr_to_sexpr_mul() {
+        let expr: Expr = parse_quote! { x * y };
+        let params = HashSet::new();
+        let result = expr_to_sexpr(&expr, &params).unwrap();
+        assert_eq!(result, "(* x y)");
+    }
+
+    #[test]
+    fn test_expr_to_sexpr_sub() {
+        let expr: Expr = parse_quote! { x - y };
+        let params = HashSet::new();
+        let result = expr_to_sexpr(&expr, &params).unwrap();
+        assert_eq!(result, "(+ x (* -1 y))");
+    }
+
+    #[test]
+    fn test_expr_to_sexpr_sin() {
+        let expr: Expr = parse_quote! { x.sin() };
+        let params = HashSet::new();
+        let result = expr_to_sexpr(&expr, &params).unwrap();
+        assert_eq!(result, "(sin x)");
+    }
+
+    #[test]
+    fn test_expr_to_sexpr_cos() {
+        let expr: Expr = parse_quote! { x.cos() };
+        let params = HashSet::new();
+        let result = expr_to_sexpr(&expr, &params).unwrap();
+        assert_eq!(result, "(cos x)");
+    }
+
+    #[test]
+    fn test_expr_to_sexpr_powi() {
+        let expr: Expr = parse_quote! { x.powi(2) };
+        let params = HashSet::new();
+        let result = expr_to_sexpr(&expr, &params).unwrap();
+        assert_eq!(result, "(pow x 2)");
+    }
+
+    #[test]
+    fn test_expr_to_sexpr_function_call() {
+        let expr: Expr = parse_quote! { f(x) };
+        let params = HashSet::new();
+        let result = expr_to_sexpr(&expr, &params).unwrap();
+        assert_eq!(result, "(f x)");
+    }
+
+    #[test]
+    fn test_expr_to_sexpr_nested() {
+        let expr: Expr = parse_quote! { (x + y) * z };
+        let params = HashSet::new();
+        let result = expr_to_sexpr(&expr, &params).unwrap();
+        assert_eq!(result, "(* (+ x y) z)");
+    }
+
+    // ========================================================================
+    // Test the trig identity pattern (THIS IS THE KEY TEST)
+    // ========================================================================
+
+    #[test]
+    fn test_expr_to_sexpr_sin_squared_plus_cos_squared_with_mul() {
+        // x.sin() * x.sin() + x.cos() * x.cos()
+        let expr: Expr = parse_quote! { x.sin() * x.sin() + x.cos() * x.cos() };
+        let params = HashSet::new();
+        let result = expr_to_sexpr(&expr, &params).unwrap();
+        // Should produce: (+ (* (sin x) (sin x)) (* (cos x) (cos x)))
+        assert_eq!(result, "(+ (* (sin x) (sin x)) (* (cos x) (cos x)))");
+    }
+
+    #[test]
+    fn test_expr_to_sexpr_sin_squared_plus_cos_squared_with_powi() {
+        // x.sin().powi(2) + x.cos().powi(2)
+        let expr: Expr = parse_quote! { x.sin().powi(2) + x.cos().powi(2) };
+        let params = HashSet::new();
+        let result = expr_to_sexpr(&expr, &params).unwrap();
+        // Should produce: (+ (pow (sin x) 2) (pow (cos x) 2))
+        assert_eq!(result, "(+ (pow (sin x) 2) (pow (cos x) 2))");
+    }
+
+    // ========================================================================
+    // Test parse_atom
+    // ========================================================================
+
+    #[test]
+    fn test_parse_atom_number() {
+        let ts = parse_atom("42");
+        assert_eq!(ts.to_string(), "42f64");
+    }
+
+    #[test]
+    fn test_parse_atom_identifier() {
+        let ts = parse_atom("x");
+        assert_eq!(ts.to_string(), "x");
+    }
+
+    // ========================================================================
+    // Test sexpr_to_tokens for simple cases
+    // ========================================================================
+
+    #[test]
+    fn test_sexpr_to_tokens_number() {
+        let tokens = vec!["42".to_string()];
+        let (ts, pos) = sexpr_to_tokens(&tokens, 0).unwrap();
+        assert_eq!(pos, 1);
+        assert_eq!(ts.to_string(), "42f64");
+    }
+
+    #[test]
+    fn test_sexpr_to_tokens_identifier() {
+        let tokens = vec!["x".to_string()];
+        let (ts, pos) = sexpr_to_tokens(&tokens, 0).unwrap();
+        assert_eq!(pos, 1);
+        assert_eq!(ts.to_string(), "x");
+    }
+
+    #[test]
+    fn test_sexpr_to_tokens_add() {
+        let tokens = tokenize_sexpr("(+ 1 2)");
+        let (ts, pos) = sexpr_to_tokens(&tokens, 0).unwrap();
+        assert_eq!(pos, tokens.len());
+        // The output will have parentheses and formatting
+        assert!(ts.to_string().contains("+"));
+    }
+
+    #[test]
+    fn test_sexpr_to_tokens_sin() {
+        let tokens = tokenize_sexpr("(sin x)");
+        let (ts, pos) = sexpr_to_tokens(&tokens, 0).unwrap();
+        assert_eq!(pos, tokens.len());
+        assert!(ts.to_string().contains("sin"));
     }
 }
