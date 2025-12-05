@@ -141,6 +141,16 @@ pub fn rec_expr_to_tokens(
     // Render the RecExpr as an s-expression string for the root
     let s = rec.to_string(); // e.g., "(+ (pow (sin x) 2) (pow (cos x) 2))" or "1"
 
+    eprintln!("DEBUG: RecExpr string representation: {:?}", s);
+    eprintln!("DEBUG: RecExpr nodes: {:?}", rec.as_ref());
+
+    // Check for empty or whitespace-only strings before tokenizing
+    if s.trim().is_empty() {
+        return Err(anyhow!(
+            "RecExpr produced empty or whitespace-only string"
+        ));
+    }
+
     // Tokenize and guard against empty output
     let tokens = tokenize_sexpr(&s);
     if tokens.is_empty() {
