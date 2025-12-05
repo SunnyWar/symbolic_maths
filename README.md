@@ -104,6 +104,6 @@ pub fn A(x: f32) -> f32 {
 - Send focused pull requests with tests where applicable.  
 - Keep proc‑macro changes small and include clear error messages.
 
-**License**
+## License
 
----
+This project is licensed under the [MIT License](LICENSE).
