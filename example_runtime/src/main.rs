@@ -3,14 +3,12 @@
 use symbolic_maths::sym_math;
 
 fn b(num: f32) -> f32 {
-    // return the expression as the function value (no trailing semicolon)
-    num * num.sin() * num.sin() + num.cos() * num.cos()
+    num * 2.0
 }
 
 #[sym_math]
 pub fn a(num: f32) -> f32 {
-    // same pattern: expression as return value
-    b(num) * num.sin() * num.sin() + num.cos() * num.cos()
+    b(num) + num.sin().powi(2) + num.cos().powi(2)
 }
 
 fn main() {
