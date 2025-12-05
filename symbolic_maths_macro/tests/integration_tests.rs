@@ -31,6 +31,11 @@ fn test_trig_identity_with_mul() {
     assert!((test_sin_squared_plus_cos_squared_mul(2.3) - 1.0).abs() < 1e-6);
 }
 
+#[sym_math]
+fn test_log_simplification(x: f32, y: f32) -> f32 {
+    (x * y).ln()
+}
+
 // ============================================================================
 // Test that non-matching expressions pass through unchanged
 // ============================================================================
@@ -76,6 +81,12 @@ fn test_function_call_with_trig_identity() {
     assert_eq!(test_with_function_call(0.0), 1.0);
     assert_eq!(test_with_function_call(1.0), 3.0);
     assert!((test_with_function_call(2.5) - 6.0).abs() < 1e-6);
+}
+
+#[test]
+fn test_log_rule() {
+    // Should simplify to x.ln() + y.ln()
+    assert!((test_log_simplification(2.0, 3.0) - (2.0_f32.ln() + 3.0_f32.ln())).abs() < 1e-6);
 }
 
 // ============================================================================

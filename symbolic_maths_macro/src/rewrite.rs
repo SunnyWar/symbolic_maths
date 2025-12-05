@@ -19,6 +19,8 @@ pub fn simplify_rec_expr(expr: RecExpr<SymbolLang>) -> Result<RecExpr<SymbolLang
         rw!("sin2-cos2-pow"; "(+ (pow (sin ?x) 2) (pow (cos ?x) 2))" => "1"),
         // Trig identity: sin(x) * sin(x) + cos(x) * cos(x) -> 1 (with multiplication)
         rw!("sin2-cos2-mul"; "(+ (* (sin ?x) (sin ?x)) (* (cos ?x) (cos ?x)))" => "1"),
+        // Logarithm product rule
+        rw!("log-product"; "(log (* ?a ?b))" => "(+ (log ?a) (log ?b))"),
         // Basic simplifications
         rw!("pow-1"; "(pow ?a 1)" => "?a"),
         rw!("mul-1"; "(* 1 ?a)" => "?a"),
@@ -93,6 +95,17 @@ mod tests {
     }
 
     // ========================================================================
+    // Test identities with log
+    // ========================================================================
+
+    #[test]
+    fn test_log_product_rule() {
+        let expr = parse_sexpr("(log (* a b))");
+        let result = simplify_rec_expr(expr).unwrap();
+        assert_eq!(result.to_string(), "(+ (log a) (log b))");
+    }
+
+    // ========================================================================
     // Test trig identity with multiplication (KEY TEST!)
     // ========================================================================
 
@@ -151,7 +164,7 @@ mod tests {
         // The first term is (* (* (b num) (sin num)) (sin num))
         // which is NOT the same as (* (sin num) (sin num))
 
-        println!("Result: {}", result.to_string());
+        println!("Result: {}", result);
     }
 
     #[test]

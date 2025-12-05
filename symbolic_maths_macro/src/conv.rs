@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use egg::RecExpr;
 use egg::SymbolLang;
 use proc_macro2::Span;
+use quote::quote;
 use std::collections::HashSet;
 use syn::Expr;
 use syn::ExprBinary;
@@ -82,6 +83,8 @@ fn convert_method_call(method_call: &ExprMethodCall, params: &HashSet<String>) -
         Ok(format!("(sin {})", recv))
     } else if m == "cos" && method_call.args.is_empty() {
         Ok(format!("(cos {})", recv))
+    } else if m == "ln" && method_call.args.is_empty() {
+        Ok(format!("(log {})", recv))
     } else if m == "powi" && method_call.args.len() == 1 {
         if let Expr::Lit(ExprLit {
             lit: Lit::Int(li), ..
@@ -291,6 +294,13 @@ pub fn sexpr_to_tokens(tokens: &[String], pos: usize) -> Result<(proc_macro2::To
             "+" | "*" => parse_binary_op(op, tokens, pos),
             "sin" | "cos" => parse_unary_op(op, tokens, pos),
             "pow" => parse_pow(tokens, pos),
+            "log" => {
+                let (a, p1) = sexpr_to_tokens(tokens, pos + 2)?;
+                if p1 >= tokens.len() || tokens[p1] != ")" {
+                    return Err(anyhow!("expected ) after log expression"));
+                }
+                Ok((quote! { (#a).ln() }, p1 + 1))
+            }
             other => parse_function_call(other, tokens, pos),
         }
     } else if t == ")" {
@@ -327,8 +337,6 @@ pub fn rec_expr_to_tokens(
 }
 
 fn parse_atom(token: &str) -> proc_macro2::TokenStream {
-    use quote::quote;
-
     if token.parse::<f64>().is_ok() {
         // Generate f32 literals to match function signatures
         let lit = syn::LitFloat::new(&format!("{}f32", token), Span::call_site());
@@ -340,8 +348,6 @@ fn parse_atom(token: &str) -> proc_macro2::TokenStream {
 }
 
 fn parse_pow(tokens: &[String], pos: usize) -> Result<(proc_macro2::TokenStream, usize)> {
-    use quote::quote;
-
     let (base, p1) = sexpr_to_tokens(tokens, pos + 2)?;
     let (exp, p2) = sexpr_to_tokens(tokens, p1)?;
 
