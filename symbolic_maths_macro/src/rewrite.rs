@@ -113,6 +113,30 @@ mod tests {
         assert_eq!(result.to_string(), "1");
     }
 
+    #[test]
+    fn test_simplify_trig_identity_inside_sum() {
+        // b(num) + sin^2(num) + cos^2(num) should simplify to b(num) + 1
+        let expr = parse_sexpr("(+ (+ (b num) (pow (sin num) 2)) (pow (cos num) 2))");
+        let result = simplify_rec_expr(expr).unwrap();
+        assert_eq!(result.to_string(), "(+ (b num) 1)");
+    }
+
+    #[test]
+    fn test_simplify_trig_identity_inside_nested_sum_mul() {
+        // 3 + (sin^2(x) + cos^2(x)) should simplify to 3 + 1
+        let expr = parse_sexpr("(+ 3 (+ (pow (sin x) 2) (pow (cos x) 2)))");
+        let result = simplify_rec_expr(expr).unwrap();
+        assert_eq!(result.to_string(), "(+ 3 1)");
+    }
+
+    #[test]
+    fn test_simplify_trig_identity_with_mul_wrapper() {
+        // (sin^2(x) + cos^2(x)) * y should simplify to 1 * y
+        let expr = parse_sexpr("(* (+ (pow (sin x) 2) (pow (cos x) 2)) y)");
+        let result = simplify_rec_expr(expr).unwrap();
+        assert_eq!(result.to_string(), "(* 1 y)");
+    }
+
     // ========================================================================
     // Test identities with log
     // ========================================================================
