@@ -9,34 +9,53 @@ use egg::Runner;
 use egg::SymbolLang;
 use egg::rewrite as rw;
 
-/// Simplify a RecExpr<SymbolLang> using a small rule set
-pub fn simplify_rec_expr(expr: RecExpr<SymbolLang>) -> Result<RecExpr<SymbolLang>> {
-    let mut egraph = EGraph::<SymbolLang, ()>::default();
-    let root_id = egraph.add_expr(&expr);
-
-    let rules: &[Rewrite<SymbolLang, ()>] = &[
-        // Trig identity: sin(x)^2 + cos(x)^2 -> 1 (with pow)
-        rw!("sin2-cos2-pow"; "(+ (pow (sin ?x) 2) (pow (cos ?x) 2))" => "1"),
-        // Trig identity: sin(x) * sin(x) + cos(x) * cos(x) -> 1 (with multiplication)
-        rw!("sin2-cos2-mul"; "(+ (* (sin ?x) (sin ?x)) (* (cos ?x) (cos ?x)))" => "1"),
-        // Logarithm product rule
-        rw!("log-product"; "(log (* ?a ?b))" => "(+ (log ?a) (log ?b))"),
-        // Basic simplifications
+pub fn rules() -> Vec<Rewrite<SymbolLang, ()>> {
+    vec![
+        // --- Trigonometric identities ---
+        // sin(x)^2 + cos(x)^2 -> 1 (pow form)
+        rw!("sin2+cos2-pow"; "(+ (pow (sin ?x) 2) (pow (cos ?x) 2))" => "1"),
+        // sin(x)*sin(x) + cos(x)*cos(x) -> 1 (mul form)
+        rw!("sin2+cos2-mul"; "(+ (* (sin ?x) (sin ?x)) (* (cos ?x) (cos ?x)))" => "1"),
+        // --- Algebraic simplifications ---
         rw!("pow-1"; "(pow ?a 1)" => "?a"),
         rw!("mul-1"; "(* 1 ?a)" => "?a"),
         rw!("add-0"; "(+ 0 ?a)" => "?a"),
-    ];
+        // --- Logarithm rules ---
+        rw!("log-product"; "(log (* ?a ?b))" => "(+ (log ?a) (log ?b))"),
+        // --- Associativity & commutativity for + and * ---
+        // These let the e-graph rearrange sums/products so identities can match inside larger
+        // expressions
+        rw!("add-assoc"; "(+ ?a (+ ?b ?c))" => "(+ (+ ?a ?b) ?c)"),
+        rw!("add-comm"; "(+ ?a ?b)" => "(+ ?b ?a)"),
+        rw!("mul-assoc"; "(* ?a (* ?b ?c))" => "(* (* ?a ?b) ?c)"),
+        rw!("mul-comm"; "(* ?a ?b)" => "(* ?b ?a)"),
+        // --- Optional: flatten nested additions/multiplications ---
+        // These help expose subexpressions like sin^2+cos^2 even when wrapped in larger sums
+        rw!("add-flatten"; "(+ (+ ?a ?b) ?c)" => "(+ ?a (+ ?b ?c))"),
+        rw!("mul-flatten"; "(* (* ?a ?b) ?c)" => "(* ?a (* ?b ?c))"),
+    ]
+}
 
+/// Simplify a RecExpr<SymbolLang> using a a rule set
+pub fn simplify_rec_expr(expr: RecExpr<SymbolLang>) -> Result<RecExpr<SymbolLang>> {
+    // create a fresh e-graph and add the input expression
+    let mut egraph = EGraph::<SymbolLang, ()>::default();
+    let root_id = egraph.add_expr(&expr);
+
+    // pull in the rewrite set from your rules() function
+    let rules: Vec<Rewrite<SymbolLang, ()>> = crate::rewrite::rules();
+
+    // run the rewrites
     let runner = Runner::default()
         .with_egraph(egraph)
         .with_iter_limit(10)
-        .run(rules);
+        .run(&rules);
 
+    // extract the best (lowest-cost) expression
     let extractor = Extractor::new(&runner.egraph, AstSize);
     let (_cost, best) = extractor.find_best(root_id);
 
-    let rec: RecExpr<SymbolLang> = best;
-    Ok(rec)
+    Ok(best)
 }
 
 #[cfg(test)]
