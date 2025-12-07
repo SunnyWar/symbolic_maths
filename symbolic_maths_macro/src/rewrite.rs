@@ -24,48 +24,21 @@ fn make_rule(name: &str, lhs: &str, rhs: &str) -> Result<Rewrite<SymbolLang, ()>
     Ok(rw)
 }
 
+#[rustfmt::skip]
 pub fn rules() -> Result<Vec<Rewrite<SymbolLang, ()>>> {
     let mut v = Vec::new();
-    v.push(make_rule(
-        "sin2+cos2-pow",
-        "(+ (pow (sin ?x) 2) (pow (cos ?x) 2))",
-        "1",
-    )?);
-    v.push(make_rule(
-        "sin2+cos2-mul",
-        "(+ (* (sin ?x) (sin ?x)) (* (cos ?x) (cos ?x)))",
-        "1",
-    )?);
-    v.push(make_rule("pow-1", "(pow ?a 1)", "?a")?);
-    v.push(make_rule("mul-1", "(* 1 ?a)", "?a")?);
-    v.push(make_rule("add-0", "(+ 0 ?a)", "?a")?);
-    v.push(make_rule(
-        "log-product",
-        "(log (* ?a ?b))",
-        "(+ (log ?a) (log ?b))",
-    )?);
-    v.push(make_rule(
-        "add-assoc",
-        "(+ ?a (+ ?b ?c))",
-        "(+ (+ ?a ?b) ?c)",
-    )?);
-    v.push(make_rule("add-comm", "(+ ?a ?b)", "(+ ?b ?a)")?);
-    v.push(make_rule(
-        "mul-assoc",
-        "(* ?a (* ?b ?c))",
-        "(* (* ?a ?b) ?c)",
-    )?);
-    v.push(make_rule("mul-comm", "(* ?a ?b)", "(* ?b ?a)")?);
-    v.push(make_rule(
-        "add-flatten",
-        "(+ (+ ?a ?b) ?c)",
-        "(+ ?a (+ ?b ?c))",
-    )?);
-    v.push(make_rule(
-        "mul-flatten",
-        "(* (* ?a ?b) ?c)",
-        "(* ?a (* ?b ?c))",
-    )?);
+    v.push(make_rule("sin2+cos2-pow","(+ (pow (sin ?x) 2) (pow (cos ?x) 2))","1",)?);
+    v.push(make_rule("sin2+cos2-mul","(+ (* (sin ?x) (sin ?x)) (* (cos ?x) (cos ?x)))","1",)?);
+    v.push(make_rule("pow-1","(pow ?a 1)", "?a")?);
+    v.push(make_rule("mul-1","(* 1 ?a)", "?a")?);
+    v.push(make_rule("add-0","(+ 0 ?a)", "?a")?);
+    v.push(make_rule("log-product","(log (* ?a ?b))","(+ (log ?a) (log ?b))",)?);
+    v.push(make_rule("add-assoc","(+ ?a (+ ?b ?c))", "(+ (+ ?a ?b) ?c)",)?);
+    v.push(make_rule("add-comm","(+ ?a ?b)", "(+ ?b ?a)")?);
+    v.push(make_rule("mul-assoc","(* ?a (* ?b ?c))", "(* (* ?a ?b) ?c)",)?);
+    v.push(make_rule("mul-comm","(* ?a ?b)", "(* ?b ?a)")?);
+    v.push(make_rule("add-flatten","(+ (+ ?a ?b) ?c)","(+ ?a (+ ?b ?c))",)?);
+    v.push(make_rule("mul-flatten","(* (* ?a ?b) ?c)","(* ?a (* ?b ?c))",)?);
     Ok(v)
 }
 
