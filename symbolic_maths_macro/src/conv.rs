@@ -1,6 +1,5 @@
 // symbolic_maths_macro/src/conv.rs
-use anyhow::Result;
-use anyhow::anyhow;
+use anyhow::{Result, anyhow};
 use egg::RecExpr;
 use egg::SymbolLang;
 use proc_macro2::Span;
@@ -78,25 +77,25 @@ fn convert_binary(binary: &ExprBinary, params: &HashSet<String>) -> Result<Strin
 fn convert_method_call(method_call: &ExprMethodCall, params: &HashSet<String>) -> Result<String> {
     let recv = expr_to_sexpr(&method_call.receiver, params)?;
     let m = method_call.method.to_string();
+    let args = &method_call.args;
 
-    if m == "sin" && method_call.args.is_empty() {
-        Ok(format!("(sin {})", recv))
-    } else if m == "cos" && method_call.args.is_empty() {
-        Ok(format!("(cos {})", recv))
-    } else if m == "ln" && method_call.args.is_empty() {
-        Ok(format!("(log {})", recv))
-    } else if m == "powi" && method_call.args.len() == 1 {
-        if let Expr::Lit(ExprLit {
-            lit: Lit::Int(li), ..
-        }) = &method_call.args[0]
-        {
-            let n: i64 = li.base10_parse()?;
-            Ok(format!("(pow {} {})", recv, n))
-        } else {
-            Err(anyhow!("powi arg must be integer literal"))
+    match (m.as_str(), args.len()) {
+        ("sin", 0) => Ok(format!("(sin {})", recv)),
+        ("cos", 0) => Ok(format!("(cos {})", recv)),
+        ("ln", 0) => Ok(format!("(log {})", recv)),
+        ("powi", 1) => {
+            // expect integer literal
+            match &args[0] {
+                Expr::Lit(ExprLit {
+                    lit: Lit::Int(li), ..
+                }) => {
+                    let n: i64 = li.base10_parse()?;
+                    Ok(format!("(pow {} {})", recv, n))
+                }
+                _ => Err(anyhow!("powi arg must be integer literal")),
+            }
         }
-    } else {
-        Err(anyhow!("unsupported method call: {}", m))
+        (name, _) => Err(anyhow!("unsupported method call: {}", name)),
     }
 }
 

@@ -1,39 +1,72 @@
 // symbolic_maths_macro/src/rewrite.rs
 use anyhow::Result;
+use anyhow::anyhow;
 use egg::AstSize;
 use egg::EGraph;
 use egg::Extractor;
+use egg::Pattern;
 use egg::RecExpr;
 use egg::Rewrite;
 use egg::Runner;
 use egg::SymbolLang;
-use egg::rewrite as rw;
 
-pub fn rules() -> Vec<Rewrite<SymbolLang, ()>> {
-    vec![
-        // --- Trigonometric identities ---
-        // sin(x)^2 + cos(x)^2 -> 1 (pow form)
-        rw!("sin2+cos2-pow"; "(+ (pow (sin ?x) 2) (pow (cos ?x) 2))" => "1"),
-        // sin(x)*sin(x) + cos(x)*cos(x) -> 1 (mul form)
-        rw!("sin2+cos2-mul"; "(+ (* (sin ?x) (sin ?x)) (* (cos ?x) (cos ?x)))" => "1"),
-        // --- Algebraic simplifications ---
-        rw!("pow-1"; "(pow ?a 1)" => "?a"),
-        rw!("mul-1"; "(* 1 ?a)" => "?a"),
-        rw!("add-0"; "(+ 0 ?a)" => "?a"),
-        // --- Logarithm rules ---
-        rw!("log-product"; "(log (* ?a ?b))" => "(+ (log ?a) (log ?b))"),
-        // --- Associativity & commutativity for + and * ---
-        // These let the e-graph rearrange sums/products so identities can match inside larger
-        // expressions
-        rw!("add-assoc"; "(+ ?a (+ ?b ?c))" => "(+ (+ ?a ?b) ?c)"),
-        rw!("add-comm"; "(+ ?a ?b)" => "(+ ?b ?a)"),
-        rw!("mul-assoc"; "(* ?a (* ?b ?c))" => "(* (* ?a ?b) ?c)"),
-        rw!("mul-comm"; "(* ?a ?b)" => "(* ?b ?a)"),
-        // --- Optional: flatten nested additions/multiplications ---
-        // These help expose subexpressions like sin^2+cos^2 even when wrapped in larger sums
-        rw!("add-flatten"; "(+ (+ ?a ?b) ?c)" => "(+ ?a (+ ?b ?c))"),
-        rw!("mul-flatten"; "(* (* ?a ?b) ?c)" => "(* ?a (* ?b ?c))"),
-    ]
+fn make_rule(name: &str, lhs: &str, rhs: &str) -> Result<Rewrite<SymbolLang, ()>> {
+    let lhs_p: Pattern<SymbolLang> = lhs
+        .parse()
+        .map_err(|e| anyhow!("failed to parse LHS pattern '{}': {}", lhs, e))?;
+    let rhs_p: Pattern<SymbolLang> = rhs
+        .parse()
+        .map_err(|e| anyhow!("failed to parse RHS pattern '{}': {}", rhs, e))?;
+
+    // Rewrite::new returns Result<Rewrite<...>, String> in some egg versions
+    let rw = Rewrite::new(name, lhs_p, rhs_p)
+        .map_err(|e| anyhow!("failed to create rewrite '{}': {}", name, e))?;
+    Ok(rw)
+}
+
+pub fn rules() -> Result<Vec<Rewrite<SymbolLang, ()>>> {
+    let mut v = Vec::new();
+    v.push(make_rule(
+        "sin2+cos2-pow",
+        "(+ (pow (sin ?x) 2) (pow (cos ?x) 2))",
+        "1",
+    )?);
+    v.push(make_rule(
+        "sin2+cos2-mul",
+        "(+ (* (sin ?x) (sin ?x)) (* (cos ?x) (cos ?x)))",
+        "1",
+    )?);
+    v.push(make_rule("pow-1", "(pow ?a 1)", "?a")?);
+    v.push(make_rule("mul-1", "(* 1 ?a)", "?a")?);
+    v.push(make_rule("add-0", "(+ 0 ?a)", "?a")?);
+    v.push(make_rule(
+        "log-product",
+        "(log (* ?a ?b))",
+        "(+ (log ?a) (log ?b))",
+    )?);
+    v.push(make_rule(
+        "add-assoc",
+        "(+ ?a (+ ?b ?c))",
+        "(+ (+ ?a ?b) ?c)",
+    )?);
+    v.push(make_rule("add-comm", "(+ ?a ?b)", "(+ ?b ?a)")?);
+    v.push(make_rule(
+        "mul-assoc",
+        "(* ?a (* ?b ?c))",
+        "(* (* ?a ?b) ?c)",
+    )?);
+    v.push(make_rule("mul-comm", "(* ?a ?b)", "(* ?b ?a)")?);
+    v.push(make_rule(
+        "add-flatten",
+        "(+ (+ ?a ?b) ?c)",
+        "(+ ?a (+ ?b ?c))",
+    )?);
+    v.push(make_rule(
+        "mul-flatten",
+        "(* (* ?a ?b) ?c)",
+        "(* ?a (* ?b ?c))",
+    )?);
+    Ok(v)
 }
 
 /// Simplify a RecExpr<SymbolLang> using a a rule set
@@ -43,7 +76,7 @@ pub fn simplify_rec_expr(expr: RecExpr<SymbolLang>) -> Result<RecExpr<SymbolLang
     let root_id = egraph.add_expr(&expr);
 
     // pull in the rewrite set from your rules() function
-    let rules: Vec<Rewrite<SymbolLang, ()>> = crate::rewrite::rules();
+    let rules: Vec<Rewrite<SymbolLang, ()>> = crate::rewrite::rules()?;
 
     // run the rewrites
     let runner = Runner::default()
@@ -144,7 +177,8 @@ mod tests {
     #[test]
     fn test_log_product_rule() {
         let expr = parse_sexpr("(log (* a b))");
-        let result = simplify_rec_expr(expr).unwrap();
+        let result = simplify_rec_expr(expr).expect("simplify_rec_expr failed");
+        // Prefer comparing ASTs if possible; fallback to string compare:
         assert_eq!(result.to_string(), "(+ (log a) (log b))");
     }
 
