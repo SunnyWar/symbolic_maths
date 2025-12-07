@@ -10,7 +10,7 @@ use egg::Rewrite;
 use egg::Runner;
 use egg::SymbolLang;
 
-const ITERATION_LIMIT: usize = 50;
+const ITERATION_LIMIT: usize = 20;
 
 fn make_rule(name: &str, lhs: &str, rhs: &str) -> Result<Rewrite<SymbolLang, ()>> {
     let lhs_p: Pattern<SymbolLang> = lhs
@@ -43,11 +43,15 @@ pub fn rules() -> Result<Vec<Rewrite<SymbolLang, ()>>> {
     v.push(make_rule("pow-1", "(pow ?a 1)", "?a")?);
     v.push(make_rule("mul-1", "(* 1 ?a)", "?a")?);
     v.push(make_rule("add-0", "(+ 0 ?a)", "?a")?);
+    v.push(make_rule("mul-0", "(* ?a 0)", "0")?);
+    v.push(make_rule("log-1", "(log 1)", "0")?);
 
     // Domain-specific identities
     v.push(make_rule("sin2+cos2-pow", "(+ (pow (sin ?x) 2) (pow (cos ?x) 2))", "1")?);
     v.push(make_rule("sin2+cos2-mul", "(+ (* (sin ?x) (sin ?x)) (* (cos ?x) (cos ?x)))", "1")?);
 
+    v.push(make_rule("log-exp", "(log (exp ?x))", "?x")?);
+    
     Ok(v)
 }
 
@@ -159,6 +163,26 @@ mod tests {
     // ========================================================================
     // Test basic simplifications
     // ========================================================================
+
+    #[test]
+    fn test_log_exp_simplifies() {
+        assert_simplifies_equivalent("(log (exp x))", "x");
+    }
+
+    #[test]
+    fn test_log_1_simplifies_to_zero() {
+        assert_simplifies_equivalent("(log 1)", "0");
+    }
+
+    #[test]
+    fn test_mul_0_simplifies_to_zero() {
+        assert_simplifies_equivalent("(* x 0)", "0");
+    }
+
+    #[test]
+    fn test_mul_0_commuted_simplifies_to_zero() {
+        assert_simplifies_equivalent("(* 0 x)", "0");
+    }
 
     #[test]
     fn test_simplify_pow_1() {
