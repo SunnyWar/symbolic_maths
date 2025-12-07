@@ -10,6 +10,8 @@ use egg::Rewrite;
 use egg::Runner;
 use egg::SymbolLang;
 
+const ITERATION_LIMIT: usize = 50;
+
 fn make_rule(name: &str, lhs: &str, rhs: &str) -> Result<Rewrite<SymbolLang, ()>> {
     let lhs_p: Pattern<SymbolLang> = lhs
         .parse()
@@ -27,18 +29,29 @@ fn make_rule(name: &str, lhs: &str, rhs: &str) -> Result<Rewrite<SymbolLang, ()>
 #[rustfmt::skip]
 pub fn rules() -> Result<Vec<Rewrite<SymbolLang, ()>>> {
     let mut v = Vec::new();
-    v.push(make_rule("sin2+cos2-pow","(+ (pow (sin ?x) 2) (pow (cos ?x) 2))","1",)?);
-    v.push(make_rule("sin2+cos2-mul","(+ (* (sin ?x) (sin ?x)) (* (cos ?x) (cos ?x)))","1",)?);
-    v.push(make_rule("pow-1","(pow ?a 1)", "?a")?);
-    v.push(make_rule("mul-1","(* 1 ?a)", "?a")?);
-    v.push(make_rule("add-0","(+ 0 ?a)", "?a")?);
-    v.push(make_rule("log-product","(log (* ?a ?b))","(+ (log ?a) (log ?b))",)?);
-    v.push(make_rule("add-assoc","(+ ?a (+ ?b ?c))", "(+ (+ ?a ?b) ?c)",)?);
-    v.push(make_rule("add-comm","(+ ?a ?b)", "(+ ?b ?a)")?);
-    v.push(make_rule("mul-assoc","(* ?a (* ?b ?c))", "(* (* ?a ?b) ?c)",)?);
-    v.push(make_rule("mul-comm","(* ?a ?b)", "(* ?b ?a)")?);
-    v.push(make_rule("add-flatten","(+ (+ ?a ?b) ?c)","(+ ?a (+ ?b ?c))",)?);
-    v.push(make_rule("mul-flatten","(* (* ?a ?b) ?c)","(* ?a (* ?b ?c))",)?);
+
+    // Normalize shapes and ordering first
+    v.push(make_rule("add-comm", "(+ ?a ?b)", "(+ ?b ?a)")?);
+    v.push(make_rule("add-assoc", "(+ ?a (+ ?b ?c))", "(+ (+ ?a ?b) ?c)")?);
+    v.push(make_rule("add-flatten", "(+ (+ ?a ?b) ?c)", "(+ ?a (+ ?b ?c))")?);
+
+    v.push(make_rule("mul-comm", "(* ?a ?b)", "(* ?b ?a)")?);
+    v.push(make_rule("mul-assoc", "(* ?a (* ?b ?c))", "(* (* ?a ?b) ?c)")?);
+    v.push(make_rule("mul-flatten", "(* (* ?a ?b) ?c)", "(* ?a (* ?b ?c))")?);
+
+    // Simple algebraic simplifications
+    v.push(make_rule("pow-1", "(pow ?a 1)", "?a")?);
+    v.push(make_rule("mul-1", "(* 1 ?a)", "?a")?);
+    v.push(make_rule("add-0", "(+ 0 ?a)", "?a")?);
+
+    // Domain-specific identities
+    v.push(make_rule("sin2+cos2-pow", "(+ (pow (sin ?x) 2) (pow (cos ?x) 2))", "1")?);
+    v.push(make_rule("sin2+cos2-mul", "(+ (* (sin ?x) (sin ?x)) (* (cos ?x) (cos ?x)))", "1")?);
+
+    // Log-product and its commuted variant
+    v.push(make_rule("log-product", "(log (* ?a ?b))", "(+ (log ?a) (log ?b))")?);
+    v.push(make_rule("log-product-comm", "(log (* ?b ?a))", "(+ (log ?a) (log ?b))")?);
+
     Ok(v)
 }
 
@@ -72,7 +85,7 @@ pub fn simplify_rec_expr(expr: RecExpr<SymbolLang>) -> Result<RecExpr<SymbolLang
                     let _ = eg.add_expr(&expr);
                     Runner::default()
                         .with_egraph(eg)
-                        .with_iter_limit(50)
+                        .with_iter_limit(ITERATION_LIMIT)
                         .run(&single)
                 }));
                 if res.is_err() {
