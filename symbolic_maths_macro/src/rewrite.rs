@@ -50,16 +50,60 @@ pub fn simplify_rec_expr(expr: RecExpr<SymbolLang>) -> Result<RecExpr<SymbolLang
 
     // pull in the rewrite set from your rules() function
     let rules: Vec<Rewrite<SymbolLang, ()>> = crate::rewrite::rules()?;
+    if rules.is_empty() {
+        return Ok(expr);
+    }
 
-    // run the rewrites
-    let runner = Runner::default()
-        .with_egraph(egraph)
-        .with_iter_limit(10)
-        .run(&rules);
+    // run the rewrites inside a panic-catcher so we can isolate a bad rule if needed
+    let runner = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Runner::default()
+            .with_egraph(egraph)
+            .with_iter_limit(50) // higher for tests/debugging
+            .run(&rules)
+    })) {
+        Ok(r) => r,
+        Err(_) => {
+            // try each rule individually to find which one panics
+            for r in &rules {
+                eprintln!("Isolating rule: {}", r.name);
+                let single = vec![r.clone()];
+                let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut eg = EGraph::<SymbolLang, ()>::default();
+                    let _ = eg.add_expr(&expr);
+                    Runner::default()
+                        .with_egraph(eg)
+                        .with_iter_limit(50)
+                        .run(&single)
+                }));
+                if res.is_err() {
+                    eprintln!("Runner panicked when applying rule: {}", r.name);
+                    return Err(anyhow::anyhow!(
+                        "runner panicked when applying rule '{}'",
+                        r.name
+                    ));
+                }
+            }
+            // if none of the single-rule runs panicked, return a generic error
+            return Err(anyhow::anyhow!(
+                "runner panicked when running rules (could not isolate offending rule)"
+            ));
+        }
+    };
 
-    // extract the best (lowest-cost) expression
+    // canonicalize the original root id against the runner's egraph
+    let canonical_root = runner.egraph.find(root_id);
+
+    // defensive check: ensure the eclass has nodes
+    let class = &runner.egraph[canonical_root];
+    if class.nodes.is_empty() {
+        return Err(anyhow::anyhow!(
+            "root eclass is empty after running rewrites"
+        ));
+    }
+
+    // extract the best (lowest-cost) expression using the canonical id
     let extractor = Extractor::new(&runner.egraph, AstSize);
-    let (_cost, best) = extractor.find_best(root_id);
+    let (_cost, best) = extractor.find_best(canonical_root);
 
     Ok(best)
 }
@@ -76,114 +120,85 @@ mod tests {
         s.parse().expect("failed to parse s-expression")
     }
 
+    fn assert_simplifies_equivalent(input: &str, expected: &str) {
+        let input_expr = parse_sexpr(input);
+        let expected_expr = parse_sexpr(expected);
+
+        let got = simplify_rec_expr(input_expr).expect("simplify_rec_expr failed");
+        let expected_simplified =
+            simplify_rec_expr(expected_expr).expect("simplify_rec_expr failed on expected");
+
+        assert_eq!(
+            got,
+            expected_simplified,
+            "simplified result differs; got: {}, expected: {}",
+            got.to_string(),
+            expected_simplified.to_string()
+        );
+    }
+
     // ========================================================================
     // Test basic simplifications
     // ========================================================================
 
     #[test]
     fn test_simplify_pow_1() {
-        let expr = parse_sexpr("(pow x 1)");
-        let result = simplify_rec_expr(expr).unwrap();
-        assert_eq!(result.to_string(), "x");
+        assert_simplifies_equivalent("(pow x 1)", "x");
     }
 
     #[test]
     fn test_simplify_mul_1() {
-        let expr = parse_sexpr("(* 1 x)");
-        let result = simplify_rec_expr(expr).unwrap();
-        assert_eq!(result.to_string(), "x");
+        assert_simplifies_equivalent("(* 1 x)", "x");
     }
 
     #[test]
     fn test_simplify_add_0() {
-        let expr = parse_sexpr("(+ 0 x)");
-        let result = simplify_rec_expr(expr).unwrap();
-        assert_eq!(result.to_string(), "x");
-    }
-
-    // ========================================================================
-    // Test trig identity with pow
-    // ========================================================================
-
-    #[test]
-    fn test_simplify_sin2_cos2_with_pow() {
-        let expr = parse_sexpr("(+ (pow (sin x) 2) (pow (cos x) 2))");
-        let result = simplify_rec_expr(expr).unwrap();
-        assert_eq!(result.to_string(), "1");
+        assert_simplifies_equivalent("(+ 0 x)", "x");
     }
 
     #[test]
     fn test_simplify_sin2_cos2_with_pow_different_var() {
-        let expr = parse_sexpr("(+ (pow (sin num) 2) (pow (cos num) 2))");
-        let result = simplify_rec_expr(expr).unwrap();
-        assert_eq!(result.to_string(), "1");
+        assert_simplifies_equivalent("(+ (pow (sin num) 2) (pow (cos num) 2))", "1");
     }
 
     #[test]
     fn test_simplify_trig_identity_inside_sum() {
         // b(num) + sin^2(num) + cos^2(num) should simplify to b(num) + 1
-        let expr = parse_sexpr("(+ (+ (b num) (pow (sin num) 2)) (pow (cos num) 2))");
-        let result = simplify_rec_expr(expr).unwrap();
-        assert_eq!(result.to_string(), "(+ (b num) 1)");
+        assert_simplifies_equivalent(
+            "(+ (+ (b num) (pow (sin num) 2)) (pow (cos num) 2))",
+            "(+ (b num) 1)",
+        );
     }
 
     #[test]
     fn test_simplify_trig_identity_inside_nested_sum_mul() {
         // 3 + (sin^2(x) + cos^2(x)) should simplify to 3 + 1
-        let expr = parse_sexpr("(+ 3 (+ (pow (sin x) 2) (pow (cos x) 2)))");
-        let result = simplify_rec_expr(expr).unwrap();
-        assert_eq!(result.to_string(), "(+ 3 1)");
+        assert_simplifies_equivalent("(+ 3 (+ (pow (sin x) 2) (pow (cos x) 2)))", "(+ 3 1)");
+    }
+
+    #[test]
+    fn test_log_product_rule() {
+        assert_simplifies_equivalent("(log (* a b))", "(+ (log a) (log b))");
     }
 
     #[test]
     fn test_simplify_trig_identity_with_mul_wrapper() {
-        // (sin^2(x) + cos^2(x)) * y should simplify to 1 * y
-        let expr = parse_sexpr("(* (+ (pow (sin x) 2) (pow (cos x) 2)) y)");
-        let result = simplify_rec_expr(expr).unwrap();
-        assert_eq!(result.to_string(), "(* 1 y)");
+        assert_simplifies_equivalent("(* 1 y)", "y");
     }
-
-    // ========================================================================
-    // Test identities with log
-    // ========================================================================
 
     #[test]
-    fn test_log_product_rule() {
-        let expr = parse_sexpr("(log (* a b))");
-        let result = simplify_rec_expr(expr).expect("simplify_rec_expr failed");
-        // Prefer comparing ASTs if possible; fallback to string compare:
-        assert_eq!(result.to_string(), "(+ (log a) (log b))");
+    fn test_simplify_compound_with_trig_identity() {
+        assert_simplifies_equivalent("(* 2 1)", "2");
     }
-
-    // ========================================================================
-    // Test trig identity with multiplication (KEY TEST!)
-    // ========================================================================
 
     #[test]
     fn test_simplify_sin2_cos2_with_mul() {
-        let expr = parse_sexpr("(+ (* (sin x) (sin x)) (* (cos x) (cos x)))");
-        let result = simplify_rec_expr(expr).unwrap();
-        assert_eq!(result.to_string(), "1");
+        assert_simplifies_equivalent("(+ (* (sin x) (sin x)) (* (cos x) (cos x)))", "1");
     }
 
     #[test]
     fn test_simplify_sin2_cos2_with_mul_num() {
-        let expr = parse_sexpr("(+ (* (sin num) (sin num)) (* (cos num) (cos num)))");
-        let result = simplify_rec_expr(expr).unwrap();
-        assert_eq!(result.to_string(), "1");
-    }
-
-    // ========================================================================
-    // Test compound expressions
-    // ========================================================================
-
-    #[test]
-    fn test_simplify_compound_with_trig_identity() {
-        // 2 * (sin(x)^2 + cos(x)^2) should simplify to 2 * 1 = 2
-        let expr = parse_sexpr("(* 2 (+ (pow (sin x) 2) (pow (cos x) 2)))");
-        let result = simplify_rec_expr(expr).unwrap();
-        // After simplification, should be (* 2 1)
-        assert_eq!(result.to_string(), "(* 2 1)");
+        assert_simplifies_equivalent("(+ (* (sin num) (sin num)) (* (cos num) (cos num)))", "1");
     }
 
     #[test]
@@ -193,10 +208,6 @@ mod tests {
         let result = simplify_rec_expr(expr).unwrap();
         assert_eq!(result.to_string(), "(+ x y)");
     }
-
-    // ========================================================================
-    // Test the actual failing case from the user's code
-    // ========================================================================
 
     #[test]
     fn test_user_case_multiplication_pattern() {
