@@ -63,6 +63,16 @@ cargo build
 cargo run
 ```
 
+## Examples
+
+A runnable example is included in the workspace as `example_runtime`. It demonstrates the macro on a small function and compares the macro‑transformed version with the original.
+
+**Run the example**
+```bash
+# from the workspace root
+cargo run -p example_runtime --release
+```
+
 **Important usage constraints**
 
 - **Single expression body**: The function must be a single expression (no statements).  
