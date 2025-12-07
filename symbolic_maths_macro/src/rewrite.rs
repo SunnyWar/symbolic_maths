@@ -48,9 +48,15 @@ pub fn rules() -> Result<Vec<Rewrite<SymbolLang, ()>>> {
     v.push(make_rule("sin2+cos2-pow", "(+ (pow (sin ?x) 2) (pow (cos ?x) 2))", "1")?);
     v.push(make_rule("sin2+cos2-mul", "(+ (* (sin ?x) (sin ?x)) (* (cos ?x) (cos ?x)))", "1")?);
 
-    // Log-product and its commuted variant
-    v.push(make_rule("log-product", "(log (* ?a ?b))", "(+ (log ?a) (log ?b))")?);
-    v.push(make_rule("log-product-comm", "(log (* ?b ?a))", "(+ (log ?a) (log ?b))")?);
+    Ok(v)
+}
+
+#[rustfmt::skip]
+pub fn algebraic_rules() -> Result<Vec<Rewrite<SymbolLang, ()>>> {
+    let mut v = Vec::new();
+
+    v.push(make_rule("log-sum-to-product","(+ (log ?a) (log ?b))","(log (* ?a ?b))",)?);
+    v.push(make_rule("log-sum-to-product-comm","(+ (log ?b) (log ?a))","(log (* ?a ?b))",)?);
 
     Ok(v)
 }
@@ -71,7 +77,7 @@ pub fn simplify_rec_expr(expr: RecExpr<SymbolLang>) -> Result<RecExpr<SymbolLang
     let runner = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         Runner::default()
             .with_egraph(egraph)
-            .with_iter_limit(50) // higher for tests/debugging
+            .with_iter_limit(50)
             .run(&rules)
     })) {
         Ok(r) => r,
@@ -187,11 +193,6 @@ mod tests {
     fn test_simplify_trig_identity_inside_nested_sum_mul() {
         // 3 + (sin^2(x) + cos^2(x)) should simplify to 3 + 1
         assert_simplifies_equivalent("(+ 3 (+ (pow (sin x) 2) (pow (cos x) 2)))", "(+ 3 1)");
-    }
-
-    #[test]
-    fn test_log_product_rule() {
-        assert_simplifies_equivalent("(log (* a b))", "(+ (log a) (log b))");
     }
 
     #[test]
