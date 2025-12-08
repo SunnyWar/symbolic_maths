@@ -195,3 +195,173 @@ fn test_identity_function() {
     assert_eq!(test_identity_64(5.0), 5.0);
     assert_eq!(test_identity_64(std::f64::consts::PI), std::f64::consts::PI);
 }
+
+#[sym_math]
+fn comm_add(a: f32, b: f32) -> f32 {
+    a + b
+}
+
+#[test]
+fn test_add_comm() {
+    assert_eq!(comm_add(2.0, 3.0), 5.0);
+    assert_eq!(comm_add(3.0, 2.0), 5.0);
+}
+
+#[sym_math]
+fn assoc_add(a: f32, b: f32, c: f32) -> f32 {
+    a + (b + c)
+}
+
+#[sym_math]
+fn flat_add(a: f32, b: f32, c: f32) -> f32 {
+    (a + b) + c
+}
+
+#[test]
+fn test_add_assoc_flatten() {
+    assert_eq!(assoc_add(1.0, 2.0, 3.0), flat_add(1.0, 2.0, 3.0));
+}
+
+#[sym_math]
+fn assoc_mul(a: f32, b: f32, c: f32) -> f32 {
+    a * (b * c)
+}
+
+#[sym_math]
+fn flat_mul(a: f32, b: f32, c: f32) -> f32 {
+    (a * b) * c
+}
+
+#[test]
+fn test_mul_assoc_flatten() {
+    assert_eq!(assoc_mul(2.0, 3.0, 4.0), flat_mul(2.0, 3.0, 4.0));
+}
+
+#[sym_math]
+fn pow_one_s_expr(x: f32) -> f32 {
+    x.powi(1)
+}
+
+#[sym_math]
+fn pow_one_explicit(x: f32) -> f32 {
+    x
+} // after rewrite should be identical
+
+#[test]
+fn test_pow_one() {
+    assert_eq!(pow_one_s_expr(2.0), pow_one_explicit(2.0));
+}
+
+#[sym_math]
+fn left_mul_one(x: f32) -> f32 {
+    1.0 * x
+}
+#[sym_math]
+fn right_mul_one(x: f32) -> f32 {
+    x * 1.0
+}
+#[sym_math]
+fn left_add_zero(x: f32) -> f32 {
+    0.0 + x
+}
+#[sym_math]
+fn right_add_zero(x: f32) -> f32 {
+    x + 0.0
+}
+
+#[test]
+fn test_mul_add_identity() {
+    assert_eq!(left_mul_one(3.0), 3.0);
+    assert_eq!(right_mul_one(3.0), 3.0);
+    assert_eq!(left_add_zero(3.0), 3.0);
+    assert_eq!(right_add_zero(3.0), 3.0);
+}
+
+#[sym_math]
+fn left_mul_zero(x: f32) -> f32 {
+    0.0 * x
+}
+#[sym_math]
+fn right_mul_zero(x: f32) -> f32 {
+    x * 0.0
+}
+
+#[test]
+fn test_mul_zero() {
+    assert_eq!(left_mul_zero(3.0), 0.0);
+    assert_eq!(right_mul_zero(3.0), 0.0);
+}
+
+#[sym_math]
+fn nested_trig(x: f32) -> f32 {
+    5.0 + (x.sin().powi(2) + x.cos().powi(2))
+}
+#[sym_math]
+fn nested_trig_mul(x: f32) -> f32 {
+    5.0 + (x.sin() * x.sin() + x.cos() * x.cos())
+}
+
+#[test]
+fn test_nested_trig() {
+    assert_eq!(nested_trig(1.2), nested_trig_mul(1.2));
+}
+
+#[sym_math]
+fn f32_add(x: f32) -> f32 {
+    x + 1.0
+}
+#[sym_math]
+fn f64_add(x: f64) -> f64 {
+    x + 1.0
+}
+
+#[test]
+fn test_float_literal_types() {
+    assert_eq!(f32_add(2.0), 3.0_f32);
+    assert_eq!(f64_add(2.0), 3.0_f64);
+}
+
+#[sym_math]
+fn almost_trig(x: f32) -> f32 {
+    x.sin().powi(3) + x.cos().powi(2)
+}
+
+#[test]
+fn test_nonmatching_shape() {
+    // powi(3) + powi(2) should not reduce to 1
+    assert!((almost_trig(0.5) - 1.0).abs() > 1e-6);
+}
+
+#[sym_math]
+fn many_add(a: f32, b: f32, c: f32, d: f32) -> f32 {
+    a + b + c + d
+}
+#[test]
+fn test_many_add() {
+    assert_eq!(many_add(1.0, 2.0, 3.0, 4.0), 10.0);
+}
+
+/*
+#[sym_math] fn pow_nonconst(x: f32, y: f32) -> f32 { x.powf(y) }
+
+#[test]
+fn test_pow_nonconst_no_crash() {
+    // Should compile and run; macro should not try to convert non-const exponent to powi
+    let _ = pow_nonconst(2.0, 1.5);
+}
+
+#[sym_math]
+fn log_one() -> f32 {
+    1.0_f32.ln()
+}
+#[sym_math]
+fn log_of_exp(x: f32) -> f32 {
+    (x.exp()).ln()
+}
+
+#[test]
+fn test_log_rules() {
+    assert_eq!(log_one(), 0.0);
+    assert!((log_of_exp(2.3) - 2.3).abs() < 1e-6);
+}
+*/
