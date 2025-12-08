@@ -6,7 +6,7 @@ use symbolic_maths::sym_math;
 // ============================================================================
 
 #[sym_math]
-fn test_sin_squared_plus_cos_squared_powi(_x: f32) -> f32 {
+fn test_sin_squared_plus_cos_squared_powi_32(_x: f32) -> f32 {
     _x.sin().powi(2) + _x.cos().powi(2)
 }
 
@@ -18,26 +18,44 @@ fn test_sin_squared_plus_cos_squared_powi_64(_x: f64) -> f64 {
 #[test]
 fn test_trig_identity_with_powi() {
     // Should simplify to 1
-    assert_eq!(test_sin_squared_plus_cos_squared_powi(0.0), 1.0);
-    assert_eq!(test_sin_squared_plus_cos_squared_powi(1.0), 1.0);
-    assert!((test_sin_squared_plus_cos_squared_powi(2.3) - 1.0).abs() < 1e-6);
+    assert_eq!(test_sin_squared_plus_cos_squared_powi_32(0.0), 1.0);
+    assert_eq!(test_sin_squared_plus_cos_squared_powi_32(1.0), 1.0);
+    assert!((test_sin_squared_plus_cos_squared_powi_32(2.3) - 1.0).abs() < 1e-6);
+
+    assert_eq!(test_sin_squared_plus_cos_squared_powi_64(0.0), 1.0);
+    assert_eq!(test_sin_squared_plus_cos_squared_powi_64(1.0), 1.0);
+    assert!((test_sin_squared_plus_cos_squared_powi_64(2.3) - 1.0).abs() < 1e-6);
 }
 
 #[sym_math]
-fn test_sin_squared_plus_cos_squared_mul(_x: f32) -> f32 {
+fn test_sin_squared_plus_cos_squared_mul_32(_x: f32) -> f32 {
+    _x.sin() * _x.sin() + _x.cos() * _x.cos()
+}
+
+#[sym_math]
+fn test_sin_squared_plus_cos_squared_mul_64(_x: f64) -> f64 {
     _x.sin() * _x.sin() + _x.cos() * _x.cos()
 }
 
 #[test]
 fn test_trig_identity_with_mul() {
     // Should simplify to 1
-    assert_eq!(test_sin_squared_plus_cos_squared_mul(0.0), 1.0);
-    assert_eq!(test_sin_squared_plus_cos_squared_mul(1.0), 1.0);
-    assert!((test_sin_squared_plus_cos_squared_mul(2.3) - 1.0).abs() < 1e-6);
+    assert_eq!(test_sin_squared_plus_cos_squared_mul_32(0.0), 1.0);
+    assert_eq!(test_sin_squared_plus_cos_squared_mul_32(1.0), 1.0);
+    assert!((test_sin_squared_plus_cos_squared_mul_32(2.3) - 1.0).abs() < 1e-6);
+
+    assert_eq!(test_sin_squared_plus_cos_squared_mul_64(0.0), 1.0);
+    assert_eq!(test_sin_squared_plus_cos_squared_mul_64(1.0), 1.0);
+    assert!((test_sin_squared_plus_cos_squared_mul_64(2.3) - 1.0).abs() < 1e-6);
 }
 
 #[sym_math]
-fn test_log_simplification(x: f32, y: f32) -> f32 {
+fn test_log_simplification_32(x: f32, y: f32) -> f32 {
+    (x * y).ln()
+}
+
+#[sym_math]
+fn test_log_simplification_64(x: f64, y: f64) -> f64 {
     (x * y).ln()
 }
 
@@ -91,7 +109,8 @@ fn test_function_call_with_trig_identity() {
 #[test]
 fn test_log_rule() {
     // Should simplify to x.ln() + y.ln()
-    assert!((test_log_simplification(2.0, 3.0) - (2.0_f32.ln() + 3.0_f32.ln())).abs() < 1e-6);
+    assert!((test_log_simplification_32(2.0, 3.0) - (2.0_f32.ln() + 3.0_f32.ln())).abs() < 1e-6);
+    assert!((test_log_simplification_64(2.0, 3.0) - (2.0_f64.ln() + 3.0_f64.ln())).abs() < 1e-6);
 }
 
 // ============================================================================
