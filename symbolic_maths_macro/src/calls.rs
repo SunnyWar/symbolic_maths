@@ -7,7 +7,7 @@ use syn::ExprMethodCall;
 use syn::ExprPath;
 use syn::Lit;
 
-use crate::conv::expr_to_sexpr;
+use crate::parser::expr_to_sexpr;
 use crate::types::ConversionContext;
 
 // Convert method calls (sin, cos, ln, powi, etc.) on receivers into s-expressions.

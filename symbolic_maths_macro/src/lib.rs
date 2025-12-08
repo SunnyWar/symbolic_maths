@@ -7,6 +7,7 @@ use syn::Stmt;
 mod calls;
 mod conv;
 mod literals;
+mod parser;
 mod rewrite;
 mod types;
 
