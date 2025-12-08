@@ -17,6 +17,10 @@ use syn::Lit;
 use syn::UnOp;
 use syn::{FnArg, Pat};
 
+use crate::literals::convert_literal;
+use crate::types::ConversionContext;
+use crate::types::detect_primary_float;
+
 // ============================================================================
 // STEP 1: Extract function parameters from signature
 // ============================================================================
@@ -38,30 +42,16 @@ pub fn extract_param_names_ordered(sig: &syn::Signature) -> Vec<String> {
 // STEP 2: Convert individual expression types to s-expressions
 // ============================================================================
 
-fn convert_literal(lit: &Lit) -> Result<String> {
-    match lit {
-        Lit::Float(lf) => {
-            let v: f64 = lf.base10_parse()?;
-            Ok(format!("{}", v))
-        }
-        Lit::Int(li) => {
-            let v: f64 = li.base10_parse()?;
-            Ok(format!("{}", v))
-        }
-        _ => Err(anyhow!("unsupported literal type")),
-    }
-}
-
 // Convert a path expression (identifier or path) to its s-expression token.
-fn convert_path(path: &syn::Path, _params: &IndexSet<String>) -> Result<String> {
+fn convert_path(path: &syn::Path, _ctx: &ConversionContext) -> Result<String> {
     let s = path.segments.last().unwrap().ident.to_string();
     Ok(s)
 }
 
 // Convert a unary expression (e.g., negation) into an s-expression.
-fn convert_unary(u: &ExprUnary, params: &IndexSet<String>) -> Result<String> {
+fn convert_unary(u: &ExprUnary, ctx: &ConversionContext) -> Result<String> {
     if let UnOp::Neg(_) = u.op {
-        let inner = expr_to_sexpr(&u.expr, params)?;
+        let inner = expr_to_sexpr(&u.expr, ctx)?;
         Ok(format!("(* -1 {})", inner))
     } else {
         Err(anyhow!("unsupported unary op"))
@@ -69,9 +59,9 @@ fn convert_unary(u: &ExprUnary, params: &IndexSet<String>) -> Result<String> {
 }
 
 // Convert a binary expression (+, -, *) into the corresponding s-expression.
-fn convert_binary(binary: &ExprBinary, params: &IndexSet<String>) -> Result<String> {
-    let l = expr_to_sexpr(&binary.left, params)?;
-    let r = expr_to_sexpr(&binary.right, params)?;
+fn convert_binary(binary: &ExprBinary, ctx: &ConversionContext) -> Result<String> {
+    let l = expr_to_sexpr(&binary.left, ctx)?;
+    let r = expr_to_sexpr(&binary.right, ctx)?;
     match binary.op {
         syn::BinOp::Add(_) => Ok(format!("(+ {} {})", l, r)),
         syn::BinOp::Mul(_) => Ok(format!("(* {} {})", l, r)),
@@ -81,8 +71,8 @@ fn convert_binary(binary: &ExprBinary, params: &IndexSet<String>) -> Result<Stri
 }
 
 // Convert method calls (sin, cos, ln, powi, etc.) on receivers into s-expressions.
-fn convert_method_call(method_call: &ExprMethodCall, params: &IndexSet<String>) -> Result<String> {
-    let recv = expr_to_sexpr(&method_call.receiver, params)?;
+fn convert_method_call(method_call: &ExprMethodCall, ctx: &ConversionContext) -> Result<String> {
+    let recv = expr_to_sexpr(&method_call.receiver, ctx)?;
     let m = method_call.method.to_string();
     let args = &method_call.args;
 
@@ -90,24 +80,21 @@ fn convert_method_call(method_call: &ExprMethodCall, params: &IndexSet<String>) 
         ("sin", 0) => Ok(format!("(sin {})", recv)),
         ("cos", 0) => Ok(format!("(cos {})", recv)),
         ("ln", 0) => Ok(format!("(log {})", recv)),
-        ("powi", 1) => {
-            // expect integer literal
-            match &args[0] {
-                Expr::Lit(ExprLit {
-                    lit: Lit::Int(li), ..
-                }) => {
-                    let n: i64 = li.base10_parse()?;
-                    Ok(format!("(pow {} {})", recv, n))
-                }
-                _ => Err(anyhow!("powi arg must be integer literal")),
+        ("powi", 1) => match &args[0] {
+            Expr::Lit(ExprLit {
+                lit: Lit::Int(li), ..
+            }) => {
+                let n: i64 = li.base10_parse()?;
+                Ok(format!("(pow {} {})", recv, n))
             }
-        }
+            _ => Err(anyhow!("powi arg must be integer literal")),
+        },
         (name, _) => Err(anyhow!("unsupported method call: {}", name)),
     }
 }
 
 // Convert free function calls into s-expressions, handling argument conversion.
-fn convert_function_call(call: &ExprCall, params: &IndexSet<String>) -> Result<String> {
+fn convert_function_call(call: &ExprCall, ctx: &ConversionContext) -> Result<String> {
     if let Expr::Path(ExprPath { path, .. }) = &*call.func {
         let fname = {
             let mut ts = proc_macro2::TokenStream::new();
@@ -117,7 +104,7 @@ fn convert_function_call(call: &ExprCall, params: &IndexSet<String>) -> Result<S
 
         let mut arg_sexprs = Vec::new();
         for a in call.args.iter() {
-            arg_sexprs.push(expr_to_sexpr(a, params)?);
+            arg_sexprs.push(expr_to_sexpr(a, ctx)?);
         }
 
         if arg_sexprs.is_empty() {
@@ -134,18 +121,17 @@ fn convert_function_call(call: &ExprCall, params: &IndexSet<String>) -> Result<S
 // STEP 3: Main expression to s-expression converter
 // ============================================================================
 
-// Convert a syn::Expr into an s-expression string using the given ordered parameter set.
-fn expr_to_sexpr(expr: &Expr, params: &IndexSet<String>) -> Result<String> {
+/// Convert a syn::Expr into an s-expression string using the given ordered parameter set.
+fn expr_to_sexpr(expr: &Expr, ctx: &ConversionContext) -> Result<String> {
     match expr {
-        Expr::Lit(ExprLit { lit, .. }) => convert_literal(lit),
-        Expr::Path(ExprPath { path, .. }) => convert_path(path, params),
-        Expr::Unary(u) => convert_unary(u, params),
-        Expr::Binary(binary) => convert_binary(binary, params),
-        Expr::MethodCall(method_call) => convert_method_call(method_call, params),
-        Expr::Call(call) => convert_function_call(call, params),
-        Expr::Paren(paren) => expr_to_sexpr(&paren.expr, params),
+        Expr::Lit(ExprLit { lit, .. }) => convert_literal(lit, ctx),
+        Expr::Path(ExprPath { path, .. }) => convert_path(path, ctx),
+        Expr::Unary(u) => convert_unary(u, ctx),
+        Expr::Binary(binary) => convert_binary(binary, ctx),
+        Expr::MethodCall(method_call) => convert_method_call(method_call, ctx),
+        Expr::Call(call) => convert_function_call(call, ctx),
+        Expr::Paren(paren) => expr_to_sexpr(&paren.expr, ctx),
         _ => {
-            use quote::ToTokens;
             let mut ts = proc_macro2::TokenStream::new();
             expr.to_tokens(&mut ts);
             Err(anyhow!("unsupported expression form: {}", ts))
@@ -162,7 +148,10 @@ fn expr_to_sexpr(expr: &Expr, params: &IndexSet<String>) -> Result<String> {
 pub fn to_rec_expr(expr: &Expr, sig: &syn::Signature) -> Result<RecExpr<SymbolLang>> {
     let vec_params: Vec<String> = extract_param_names_ordered(sig);
     let params: IndexSet<String> = vec_params.into_iter().collect();
-    let s = expr_to_sexpr(expr, &params)?;
+    let float_ty = detect_primary_float(sig); // implement or stub in detect.rs
+    let ctx = ConversionContext { params, float_ty };
+
+    let s = expr_to_sexpr(expr, &ctx)?;
     eprintln!("DEBUG: s-expression before parsing: {:?}", s);
 
     let rec: RecExpr<SymbolLang> = s.parse()?;
@@ -383,6 +372,8 @@ fn parse_pow(tokens: &[String], pos: usize) -> Result<(proc_macro2::TokenStream,
 
 #[cfg(test)]
 mod tests {
+    use crate::types::FloatTy;
+
     use super::*;
     use syn::parse_quote;
 
@@ -468,14 +459,24 @@ mod tests {
     #[test]
     fn test_convert_int_literal() {
         let lit: Lit = parse_quote! { 42 };
-        let result = convert_literal(&lit).unwrap();
+        let ctx = ConversionContext {
+            params: IndexSet::new(),
+            float_ty: FloatTy::Unknown,
+        };
+        let result = convert_literal(&lit, &ctx).unwrap();
+
         assert_eq!(result, "42");
     }
 
     #[test]
     fn test_convert_float_literal() {
         let lit: Lit = parse_quote! { 3.14 };
-        let result = convert_literal(&lit).unwrap();
+        let ctx = ConversionContext {
+            params: IndexSet::new(),
+            float_ty: FloatTy::Unknown,
+        };
+        let result = convert_literal(&lit, &ctx).unwrap();
+
         assert_eq!(result, "3.14");
     }
 
@@ -485,81 +486,151 @@ mod tests {
 
     #[test]
     fn test_expr_to_sexpr_literal() {
+        use crate::types::{ConversionContext, FloatTy};
+        use indexmap::IndexSet;
+
         let expr: Expr = parse_quote! { 42 };
         let params = IndexSet::new();
-        let result = expr_to_sexpr(&expr, &params).unwrap();
+        let ctx = ConversionContext {
+            params,
+            float_ty: FloatTy::Unknown,
+        };
+        let result = expr_to_sexpr(&expr, &ctx).unwrap();
         assert_eq!(result, "42");
     }
 
     #[test]
     fn test_expr_to_sexpr_variable() {
+        use crate::types::{ConversionContext, FloatTy};
+        use indexmap::IndexSet;
+
         let expr: Expr = parse_quote! { x };
         let params = IndexSet::new();
-        let result = expr_to_sexpr(&expr, &params).unwrap();
+        let ctx = ConversionContext {
+            params,
+            float_ty: FloatTy::Unknown,
+        };
+        let result = expr_to_sexpr(&expr, &ctx).unwrap();
         assert_eq!(result, "x");
     }
 
     #[test]
     fn test_expr_to_sexpr_add() {
+        use crate::types::{ConversionContext, FloatTy};
+        use indexmap::IndexSet;
+
         let expr: Expr = parse_quote! { x + y };
         let params = IndexSet::new();
-        let result = expr_to_sexpr(&expr, &params).unwrap();
+        let ctx = ConversionContext {
+            params,
+            float_ty: FloatTy::Unknown,
+        };
+        let result = expr_to_sexpr(&expr, &ctx).unwrap();
         assert_eq!(result, "(+ x y)");
     }
 
     #[test]
     fn test_expr_to_sexpr_mul() {
+        use crate::types::{ConversionContext, FloatTy};
+        use indexmap::IndexSet;
+
         let expr: Expr = parse_quote! { x * y };
         let params = IndexSet::new();
-        let result = expr_to_sexpr(&expr, &params).unwrap();
+        let ctx = ConversionContext {
+            params,
+            float_ty: FloatTy::Unknown,
+        };
+        let result = expr_to_sexpr(&expr, &ctx).unwrap();
         assert_eq!(result, "(* x y)");
     }
 
     #[test]
     fn test_expr_to_sexpr_sub() {
+        use crate::types::{ConversionContext, FloatTy};
+        use indexmap::IndexSet;
+
         let expr: Expr = parse_quote! { x - y };
-        let mut params = IndexSet::new();
-        let result = expr_to_sexpr(&expr, &params).unwrap();
+        let params = IndexSet::new();
+        let ctx = ConversionContext {
+            params,
+            float_ty: FloatTy::Unknown,
+        };
+        let result = expr_to_sexpr(&expr, &ctx).unwrap();
         assert_eq!(result, "(+ x (* -1 y))");
     }
 
     #[test]
     fn test_expr_to_sexpr_sin() {
+        use crate::types::{ConversionContext, FloatTy};
+        use indexmap::IndexSet;
+
         let expr: Expr = parse_quote! { x.sin() };
         let params = IndexSet::new();
-        let result = expr_to_sexpr(&expr, &params).unwrap();
+        let ctx = ConversionContext {
+            params,
+            float_ty: FloatTy::Unknown,
+        };
+        let result = expr_to_sexpr(&expr, &ctx).unwrap();
         assert_eq!(result, "(sin x)");
     }
 
     #[test]
     fn test_expr_to_sexpr_cos() {
+        use crate::types::{ConversionContext, FloatTy};
+        use indexmap::IndexSet;
+
         let expr: Expr = parse_quote! { x.cos() };
         let params = IndexSet::new();
-        let result = expr_to_sexpr(&expr, &params).unwrap();
+        let ctx = ConversionContext {
+            params,
+            float_ty: FloatTy::Unknown,
+        };
+        let result = expr_to_sexpr(&expr, &ctx).unwrap();
         assert_eq!(result, "(cos x)");
     }
 
     #[test]
     fn test_expr_to_sexpr_powi() {
+        use crate::types::{ConversionContext, FloatTy};
+        use indexmap::IndexSet;
+
         let expr: Expr = parse_quote! { x.powi(2) };
         let params = IndexSet::new();
-        let result = expr_to_sexpr(&expr, &params).unwrap();
+        let ctx = ConversionContext {
+            params,
+            float_ty: FloatTy::Unknown,
+        };
+        let result = expr_to_sexpr(&expr, &ctx).unwrap();
         assert_eq!(result, "(pow x 2)");
     }
 
     #[test]
     fn test_expr_to_sexpr_function_call() {
+        use crate::types::{ConversionContext, FloatTy};
+        use indexmap::IndexSet;
+
         let expr: Expr = parse_quote! { f(x) };
         let params = IndexSet::new();
-        let result = expr_to_sexpr(&expr, &params).unwrap();
+        let ctx = ConversionContext {
+            params,
+            float_ty: FloatTy::Unknown,
+        };
+        let result = expr_to_sexpr(&expr, &ctx).unwrap();
         assert_eq!(result, "(f x)");
     }
 
     #[test]
     fn test_expr_to_sexpr_nested() {
+        use crate::types::{ConversionContext, FloatTy};
+        use indexmap::IndexSet;
+
         let expr: Expr = parse_quote! { (x + y) * z };
         let params = IndexSet::new();
-        let result = expr_to_sexpr(&expr, &params).unwrap();
+        let ctx = ConversionContext {
+            params,
+            float_ty: FloatTy::Unknown,
+        };
+        let result = expr_to_sexpr(&expr, &ctx).unwrap();
         assert_eq!(result, "(* (+ x y) z)");
     }
 
@@ -569,20 +640,34 @@ mod tests {
 
     #[test]
     fn test_expr_to_sexpr_sin_squared_plus_cos_squared_with_mul() {
+        use crate::types::{ConversionContext, FloatTy};
+        use indexmap::IndexSet;
+
         // x.sin() * x.sin() + x.cos() * x.cos()
         let expr: Expr = parse_quote! { x.sin() * x.sin() + x.cos() * x.cos() };
         let params = IndexSet::new();
-        let result = expr_to_sexpr(&expr, &params).unwrap();
+        let ctx = ConversionContext {
+            params,
+            float_ty: FloatTy::Unknown,
+        };
+        let result = expr_to_sexpr(&expr, &ctx).unwrap();
         // Should produce: (+ (* (sin x) (sin x)) (* (cos x) (cos x)))
         assert_eq!(result, "(+ (* (sin x) (sin x)) (* (cos x) (cos x)))");
     }
 
     #[test]
     fn test_expr_to_sexpr_sin_squared_plus_cos_squared_with_powi() {
+        use crate::types::{ConversionContext, FloatTy};
+        use indexmap::IndexSet;
+
         // x.sin().powi(2) + x.cos().powi(2)
         let expr: Expr = parse_quote! { x.sin().powi(2) + x.cos().powi(2) };
         let params = IndexSet::new();
-        let result = expr_to_sexpr(&expr, &params).unwrap();
+        let ctx = ConversionContext {
+            params,
+            float_ty: FloatTy::Unknown,
+        };
+        let result = expr_to_sexpr(&expr, &ctx).unwrap();
         // Should produce: (+ (pow (sin x) 2) (pow (cos x) 2))
         assert_eq!(result, "(+ (pow (sin x) 2) (pow (cos x) 2))");
     }

@@ -5,7 +5,9 @@ use syn::ItemFn;
 use syn::Stmt;
 
 mod conv;
+mod literals;
 mod rewrite;
+mod types;
 
 #[proc_macro_attribute]
 pub fn sym_math(attr: TokenStream, item: TokenStream) -> TokenStream {
