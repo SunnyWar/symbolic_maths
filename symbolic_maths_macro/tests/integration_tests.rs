@@ -117,20 +117,40 @@ fn test_log_rule() {
 // Test the problematic case from the original issue
 // ============================================================================
 
-fn b(num: f32) -> f32 {
+fn b_32(num: f32) -> f32 {
     num * num.sin() * num.sin() + num.cos() * num.cos()
 }
 
 #[sym_math]
-fn a(num: f32) -> f32 {
-    b(num) * num.sin() * num.sin() + num.cos() * num.cos()
+fn a_32(num: f32) -> f32 {
+    b_32(num) * num.sin() * num.sin() + num.cos() * num.cos()
+}
+
+fn b_64(num: f64) -> f64 {
+    num * num.sin() * num.sin() + num.cos() * num.cos()
+}
+
+#[sym_math]
+fn a_64(num: f64) -> f64 {
+    b_64(num) * num.sin() * num.sin() + num.cos() * num.cos()
 }
 
 #[test]
-fn test_original_issue() {
+fn test_original_issue_32() {
     // This currently doesn't fully simplify due to the b(num) * sin²(num) pattern
     // but at least the trailing sin²(num) + cos²(num) should simplify
-    let result = a(2.3);
+    let result = a_32(2.3);
+    println!("a(2.3) = {}", result);
+
+    // We can verify it runs without panicking
+    assert!(result.is_finite());
+}
+
+#[test]
+fn test_original_issue_64() {
+    // This currently doesn't fully simplify due to the b(num) * sin²(num) pattern
+    // but at least the trailing sin²(num) + cos²(num) should simplify
+    let result = a_64(2.3);
     println!("a(2.3) = {}", result);
 
     // We can verify it runs without panicking
@@ -142,22 +162,36 @@ fn test_original_issue() {
 // ============================================================================
 
 #[sym_math]
-fn test_literal_only(_x: f32) -> f32 {
+fn test_literal_only_32(_x: f32) -> f32 {
+    42.0
+}
+
+#[sym_math]
+fn test_literal_only_64(_x: f64) -> f64 {
     42.0
 }
 
 #[test]
 fn test_constant_function() {
-    assert_eq!(test_literal_only(100.0), 42.0);
+    assert_eq!(test_literal_only_32(100.0), 42.0);
+    assert_eq!(test_literal_only_64(100.0), 42.0);
 }
 
 #[sym_math]
-fn test_identity(x: f32) -> f32 {
+fn test_identity_32(x: f32) -> f32 {
+    x
+}
+
+#[sym_math]
+fn test_identity_64(x: f64) -> f64 {
     x
 }
 
 #[test]
 fn test_identity_function() {
-    assert_eq!(test_identity(5.0), 5.0);
-    assert_eq!(test_identity(f32::consts::PI), f32::consts::PI);
+    assert_eq!(test_identity_32(5.0), 5.0);
+    assert_eq!(test_identity_32(f32::consts::PI), f32::consts::PI);
+
+    assert_eq!(test_identity_64(5.0), 5.0);
+    assert_eq!(test_identity_64(std::f64::consts::PI), std::f64::consts::PI);
 }
