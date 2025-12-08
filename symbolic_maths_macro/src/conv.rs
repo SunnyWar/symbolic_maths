@@ -8,15 +8,16 @@ use quote::ToTokens;
 use quote::quote;
 use syn::Expr;
 use syn::ExprBinary;
-use syn::ExprCall;
+
 use syn::ExprLit;
-use syn::ExprMethodCall;
+
 use syn::ExprPath;
 use syn::ExprUnary;
-use syn::Lit;
+
 use syn::UnOp;
 use syn::{FnArg, Pat};
 
+use crate::calls::{convert_function_call, convert_method_call};
 use crate::literals::convert_literal;
 use crate::types::ConversionContext;
 use crate::types::detect_primary_float;
@@ -70,59 +71,12 @@ fn convert_binary(binary: &ExprBinary, ctx: &ConversionContext) -> Result<String
     }
 }
 
-// Convert method calls (sin, cos, ln, powi, etc.) on receivers into s-expressions.
-fn convert_method_call(method_call: &ExprMethodCall, ctx: &ConversionContext) -> Result<String> {
-    let recv = expr_to_sexpr(&method_call.receiver, ctx)?;
-    let m = method_call.method.to_string();
-    let args = &method_call.args;
-
-    match (m.as_str(), args.len()) {
-        ("sin", 0) => Ok(format!("(sin {})", recv)),
-        ("cos", 0) => Ok(format!("(cos {})", recv)),
-        ("ln", 0) => Ok(format!("(log {})", recv)),
-        ("powi", 1) => match &args[0] {
-            Expr::Lit(ExprLit {
-                lit: Lit::Int(li), ..
-            }) => {
-                let n: i64 = li.base10_parse()?;
-                Ok(format!("(pow {} {})", recv, n))
-            }
-            _ => Err(anyhow!("powi arg must be integer literal")),
-        },
-        (name, _) => Err(anyhow!("unsupported method call: {}", name)),
-    }
-}
-
-// Convert free function calls into s-expressions, handling argument conversion.
-fn convert_function_call(call: &ExprCall, ctx: &ConversionContext) -> Result<String> {
-    if let Expr::Path(ExprPath { path, .. }) = &*call.func {
-        let fname = {
-            let mut ts = proc_macro2::TokenStream::new();
-            path.to_tokens(&mut ts);
-            ts.to_string()
-        };
-
-        let mut arg_sexprs = Vec::new();
-        for a in call.args.iter() {
-            arg_sexprs.push(expr_to_sexpr(a, ctx)?);
-        }
-
-        if arg_sexprs.is_empty() {
-            Ok(fname)
-        } else {
-            Ok(format!("({} {})", fname, arg_sexprs.join(" ")))
-        }
-    } else {
-        Err(anyhow!("unsupported call form"))
-    }
-}
-
 // ============================================================================
 // STEP 3: Main expression to s-expression converter
 // ============================================================================
 
 /// Convert a syn::Expr into an s-expression string using the given ordered parameter set.
-fn expr_to_sexpr(expr: &Expr, ctx: &ConversionContext) -> Result<String> {
+pub fn expr_to_sexpr(expr: &Expr, ctx: &ConversionContext) -> Result<String> {
     match expr {
         Expr::Lit(ExprLit { lit, .. }) => convert_literal(lit, ctx),
         Expr::Path(ExprPath { path, .. }) => convert_path(path, ctx),
@@ -375,7 +329,7 @@ mod tests {
     use crate::types::FloatTy;
 
     use super::*;
-    use syn::parse_quote;
+    use syn::{Lit, parse_quote};
 
     // ========================================================================
     // Test extract_param_names

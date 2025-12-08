@@ -4,6 +4,7 @@ use quote::quote;
 use syn::ItemFn;
 use syn::Stmt;
 
+mod calls;
 mod conv;
 mod literals;
 mod rewrite;
