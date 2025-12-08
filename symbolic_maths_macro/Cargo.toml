@@ -9,6 +9,7 @@ proc-macro = true
 [dependencies]
 anyhow = "1.0.100"
 egg = "0.11.0"
+indexmap = "2.12.1"
 proc-macro2 = "1.0.103"
 quote = "1.0.42"
 syn = { version = "2", features = ["full"] }

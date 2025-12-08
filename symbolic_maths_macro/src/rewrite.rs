@@ -55,6 +55,7 @@ pub fn rules() -> Result<Vec<Rewrite<SymbolLang, ()>>> {
     Ok(v)
 }
 
+// this code requires the type to be unsigned
 #[rustfmt::skip]
 pub fn algebraic_rules() -> Result<Vec<Rewrite<SymbolLang, ()>>> {
     let mut v = Vec::new();

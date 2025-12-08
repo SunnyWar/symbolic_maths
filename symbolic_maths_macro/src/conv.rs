@@ -2,33 +2,36 @@
 use anyhow::{Result, anyhow};
 use egg::RecExpr;
 use egg::SymbolLang;
+use indexmap::IndexSet;
 use proc_macro2::Span;
+use quote::ToTokens;
 use quote::quote;
-use std::collections::HashSet;
 use syn::Expr;
 use syn::ExprBinary;
 use syn::ExprCall;
 use syn::ExprLit;
 use syn::ExprMethodCall;
 use syn::ExprPath;
+use syn::ExprUnary;
 use syn::Lit;
 use syn::UnOp;
+use syn::{FnArg, Pat};
 
 // ============================================================================
 // STEP 1: Extract function parameters from signature
 // ============================================================================
 
-/// Extract parameter names from a function signature
-pub fn extract_param_names(sig: &syn::Signature) -> HashSet<String> {
-    let mut params = HashSet::new();
+/// Return function parameter names in declaration order.
+pub fn extract_param_names_ordered(sig: &syn::Signature) -> Vec<String> {
+    let mut params = IndexSet::new();
     for input in &sig.inputs {
-        if let syn::FnArg::Typed(pat_type) = input {
-            if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
+        if let FnArg::Typed(pat_type) = input {
+            if let Pat::Ident(pat_ident) = &*pat_type.pat {
                 params.insert(pat_ident.ident.to_string());
             }
         }
     }
-    params
+    params.into_iter().collect()
 }
 
 // ============================================================================
@@ -49,12 +52,14 @@ fn convert_literal(lit: &Lit) -> Result<String> {
     }
 }
 
-fn convert_path(path: &syn::Path, _params: &HashSet<String>) -> Result<String> {
+// Convert a path expression (identifier or path) to its s-expression token.
+fn convert_path(path: &syn::Path, _params: &IndexSet<String>) -> Result<String> {
     let s = path.segments.last().unwrap().ident.to_string();
     Ok(s)
 }
 
-fn convert_unary(u: &syn::ExprUnary, params: &HashSet<String>) -> Result<String> {
+// Convert a unary expression (e.g., negation) into an s-expression.
+fn convert_unary(u: &ExprUnary, params: &IndexSet<String>) -> Result<String> {
     if let UnOp::Neg(_) = u.op {
         let inner = expr_to_sexpr(&u.expr, params)?;
         Ok(format!("(* -1 {})", inner))
@@ -63,7 +68,8 @@ fn convert_unary(u: &syn::ExprUnary, params: &HashSet<String>) -> Result<String>
     }
 }
 
-fn convert_binary(binary: &ExprBinary, params: &HashSet<String>) -> Result<String> {
+// Convert a binary expression (+, -, *) into the corresponding s-expression.
+fn convert_binary(binary: &ExprBinary, params: &IndexSet<String>) -> Result<String> {
     let l = expr_to_sexpr(&binary.left, params)?;
     let r = expr_to_sexpr(&binary.right, params)?;
     match binary.op {
@@ -74,7 +80,8 @@ fn convert_binary(binary: &ExprBinary, params: &HashSet<String>) -> Result<Strin
     }
 }
 
-fn convert_method_call(method_call: &ExprMethodCall, params: &HashSet<String>) -> Result<String> {
+// Convert method calls (sin, cos, ln, powi, etc.) on receivers into s-expressions.
+fn convert_method_call(method_call: &ExprMethodCall, params: &IndexSet<String>) -> Result<String> {
     let recv = expr_to_sexpr(&method_call.receiver, params)?;
     let m = method_call.method.to_string();
     let args = &method_call.args;
@@ -99,10 +106,10 @@ fn convert_method_call(method_call: &ExprMethodCall, params: &HashSet<String>) -
     }
 }
 
-fn convert_function_call(call: &ExprCall, params: &HashSet<String>) -> Result<String> {
+// Convert free function calls into s-expressions, handling argument conversion.
+fn convert_function_call(call: &ExprCall, params: &IndexSet<String>) -> Result<String> {
     if let Expr::Path(ExprPath { path, .. }) = &*call.func {
         let fname = {
-            use quote::ToTokens;
             let mut ts = proc_macro2::TokenStream::new();
             path.to_tokens(&mut ts);
             ts.to_string()
@@ -127,7 +134,8 @@ fn convert_function_call(call: &ExprCall, params: &HashSet<String>) -> Result<St
 // STEP 3: Main expression to s-expression converter
 // ============================================================================
 
-fn expr_to_sexpr(expr: &Expr, params: &HashSet<String>) -> Result<String> {
+// Convert a syn::Expr into an s-expression string using the given ordered parameter set.
+fn expr_to_sexpr(expr: &Expr, params: &IndexSet<String>) -> Result<String> {
     match expr {
         Expr::Lit(ExprLit { lit, .. }) => convert_literal(lit),
         Expr::Path(ExprPath { path, .. }) => convert_path(path, params),
@@ -135,8 +143,7 @@ fn expr_to_sexpr(expr: &Expr, params: &HashSet<String>) -> Result<String> {
         Expr::Binary(binary) => convert_binary(binary, params),
         Expr::MethodCall(method_call) => convert_method_call(method_call, params),
         Expr::Call(call) => convert_function_call(call, params),
-        Expr::Paren(paren) => expr_to_sexpr(&paren.expr, params), /* Handle parenthesized */
-        // expressions
+        Expr::Paren(paren) => expr_to_sexpr(&paren.expr, params),
         _ => {
             use quote::ToTokens;
             let mut ts = proc_macro2::TokenStream::new();
@@ -150,8 +157,11 @@ fn expr_to_sexpr(expr: &Expr, params: &HashSet<String>) -> Result<String> {
 // STEP 4: Top-level conversion function
 // ============================================================================
 
+/// Produce a RecExpr by converting the syn::Expr to an s-expression
+/// and parsing it into the e-graph representation.
 pub fn to_rec_expr(expr: &Expr, sig: &syn::Signature) -> Result<RecExpr<SymbolLang>> {
-    let params = extract_param_names(sig);
+    let vec_params: Vec<String> = extract_param_names_ordered(sig);
+    let params: IndexSet<String> = vec_params.into_iter().collect();
     let s = expr_to_sexpr(expr, &params)?;
     eprintln!("DEBUG: s-expression before parsing: {:?}", s);
 
@@ -383,25 +393,25 @@ mod tests {
     #[test]
     fn test_extract_param_names_single() {
         let sig: syn::Signature = parse_quote! { fn foo(x: f32) -> f32 };
-        let params = extract_param_names(&sig);
+        let params = extract_param_names_ordered(&sig);
         assert_eq!(params.len(), 1);
-        assert!(params.contains("x"));
+        assert!(params.iter().any(|s| s == "x"));
     }
 
     #[test]
     fn test_extract_param_names_multiple() {
         let sig: syn::Signature = parse_quote! { fn foo(x: f32, y: f32, z: i32) -> f32 };
-        let params = extract_param_names(&sig);
+        let params = extract_param_names_ordered(&sig);
         assert_eq!(params.len(), 3);
-        assert!(params.contains("x"));
-        assert!(params.contains("y"));
-        assert!(params.contains("z"));
+        assert!(params.iter().any(|s| s == "x"));
+        assert!(params.iter().any(|s| s == "y"));
+        assert!(params.iter().any(|s| s == "z"));
     }
 
     #[test]
     fn test_extract_param_names_none() {
         let sig: syn::Signature = parse_quote! { fn foo() -> f32 };
-        let params = extract_param_names(&sig);
+        let params = extract_param_names_ordered(&sig);
         assert_eq!(params.len(), 0);
     }
 
@@ -476,7 +486,7 @@ mod tests {
     #[test]
     fn test_expr_to_sexpr_literal() {
         let expr: Expr = parse_quote! { 42 };
-        let params = HashSet::new();
+        let params = IndexSet::new();
         let result = expr_to_sexpr(&expr, &params).unwrap();
         assert_eq!(result, "42");
     }
@@ -484,7 +494,7 @@ mod tests {
     #[test]
     fn test_expr_to_sexpr_variable() {
         let expr: Expr = parse_quote! { x };
-        let params = HashSet::new();
+        let params = IndexSet::new();
         let result = expr_to_sexpr(&expr, &params).unwrap();
         assert_eq!(result, "x");
     }
@@ -492,7 +502,7 @@ mod tests {
     #[test]
     fn test_expr_to_sexpr_add() {
         let expr: Expr = parse_quote! { x + y };
-        let params = HashSet::new();
+        let params = IndexSet::new();
         let result = expr_to_sexpr(&expr, &params).unwrap();
         assert_eq!(result, "(+ x y)");
     }
@@ -500,7 +510,7 @@ mod tests {
     #[test]
     fn test_expr_to_sexpr_mul() {
         let expr: Expr = parse_quote! { x * y };
-        let params = HashSet::new();
+        let params = IndexSet::new();
         let result = expr_to_sexpr(&expr, &params).unwrap();
         assert_eq!(result, "(* x y)");
     }
@@ -508,7 +518,7 @@ mod tests {
     #[test]
     fn test_expr_to_sexpr_sub() {
         let expr: Expr = parse_quote! { x - y };
-        let params = HashSet::new();
+        let mut params = IndexSet::new();
         let result = expr_to_sexpr(&expr, &params).unwrap();
         assert_eq!(result, "(+ x (* -1 y))");
     }
@@ -516,7 +526,7 @@ mod tests {
     #[test]
     fn test_expr_to_sexpr_sin() {
         let expr: Expr = parse_quote! { x.sin() };
-        let params = HashSet::new();
+        let params = IndexSet::new();
         let result = expr_to_sexpr(&expr, &params).unwrap();
         assert_eq!(result, "(sin x)");
     }
@@ -524,7 +534,7 @@ mod tests {
     #[test]
     fn test_expr_to_sexpr_cos() {
         let expr: Expr = parse_quote! { x.cos() };
-        let params = HashSet::new();
+        let params = IndexSet::new();
         let result = expr_to_sexpr(&expr, &params).unwrap();
         assert_eq!(result, "(cos x)");
     }
@@ -532,7 +542,7 @@ mod tests {
     #[test]
     fn test_expr_to_sexpr_powi() {
         let expr: Expr = parse_quote! { x.powi(2) };
-        let params = HashSet::new();
+        let params = IndexSet::new();
         let result = expr_to_sexpr(&expr, &params).unwrap();
         assert_eq!(result, "(pow x 2)");
     }
@@ -540,7 +550,7 @@ mod tests {
     #[test]
     fn test_expr_to_sexpr_function_call() {
         let expr: Expr = parse_quote! { f(x) };
-        let params = HashSet::new();
+        let params = IndexSet::new();
         let result = expr_to_sexpr(&expr, &params).unwrap();
         assert_eq!(result, "(f x)");
     }
@@ -548,7 +558,7 @@ mod tests {
     #[test]
     fn test_expr_to_sexpr_nested() {
         let expr: Expr = parse_quote! { (x + y) * z };
-        let params = HashSet::new();
+        let params = IndexSet::new();
         let result = expr_to_sexpr(&expr, &params).unwrap();
         assert_eq!(result, "(* (+ x y) z)");
     }
@@ -561,7 +571,7 @@ mod tests {
     fn test_expr_to_sexpr_sin_squared_plus_cos_squared_with_mul() {
         // x.sin() * x.sin() + x.cos() * x.cos()
         let expr: Expr = parse_quote! { x.sin() * x.sin() + x.cos() * x.cos() };
-        let params = HashSet::new();
+        let params = IndexSet::new();
         let result = expr_to_sexpr(&expr, &params).unwrap();
         // Should produce: (+ (* (sin x) (sin x)) (* (cos x) (cos x)))
         assert_eq!(result, "(+ (* (sin x) (sin x)) (* (cos x) (cos x)))");
@@ -571,7 +581,7 @@ mod tests {
     fn test_expr_to_sexpr_sin_squared_plus_cos_squared_with_powi() {
         // x.sin().powi(2) + x.cos().powi(2)
         let expr: Expr = parse_quote! { x.sin().powi(2) + x.cos().powi(2) };
-        let params = HashSet::new();
+        let params = IndexSet::new();
         let result = expr_to_sexpr(&expr, &params).unwrap();
         // Should produce: (+ (pow (sin x) 2) (pow (cos x) 2))
         assert_eq!(result, "(+ (pow (sin x) 2) (pow (cos x) 2))");
