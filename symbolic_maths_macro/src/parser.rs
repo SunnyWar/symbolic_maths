@@ -8,7 +8,6 @@ use syn::ExprUnary;
 use syn::UnOp;
 
 use crate::calls::{convert_function_call, convert_method_call};
-use crate::conv::convert_path;
 use crate::literals::convert_literal;
 use crate::types::ConversionContext;
 
@@ -30,8 +29,14 @@ pub fn expr_to_sexpr(expr: &Expr, ctx: &ConversionContext) -> Result<String> {
     }
 }
 
+// Convert a path expression (identifier or path) to its s-expression token.
+fn convert_path(path: &syn::Path, _ctx: &ConversionContext) -> Result<String> {
+    let s = path.segments.last().unwrap().ident.to_string();
+    Ok(s)
+}
+
 // Convert a unary expression (e.g., negation) into an s-expression.
-pub fn convert_unary(u: &ExprUnary, ctx: &ConversionContext) -> Result<String> {
+fn convert_unary(u: &ExprUnary, ctx: &ConversionContext) -> Result<String> {
     if let UnOp::Neg(_) = u.op {
         let inner = expr_to_sexpr(&u.expr, ctx)?;
         Ok(format!("(* -1 {})", inner))
@@ -41,7 +46,7 @@ pub fn convert_unary(u: &ExprUnary, ctx: &ConversionContext) -> Result<String> {
 }
 
 // Convert a binary expression (+, -, *) into the corresponding s-expression.
-pub fn convert_binary(binary: &ExprBinary, ctx: &ConversionContext) -> Result<String> {
+fn convert_binary(binary: &ExprBinary, ctx: &ConversionContext) -> Result<String> {
     let l = expr_to_sexpr(&binary.left, ctx)?;
     let r = expr_to_sexpr(&binary.right, ctx)?;
     match binary.op {

@@ -4,11 +4,8 @@ use egg::RecExpr;
 use egg::SymbolLang;
 use indexmap::IndexSet;
 use proc_macro2::Span;
-
 use quote::quote;
 use syn::Expr;
-use syn::ExprUnary;
-use syn::UnOp;
 use syn::{FnArg, Pat};
 
 use crate::parser::expr_to_sexpr;
@@ -30,26 +27,6 @@ pub fn extract_param_names_ordered(sig: &syn::Signature) -> Vec<String> {
         }
     }
     params.into_iter().collect()
-}
-
-// ============================================================================
-// STEP 2: Convert individual expression types to s-expressions
-// ============================================================================
-
-// Convert a path expression (identifier or path) to its s-expression token.
-pub fn convert_path(path: &syn::Path, _ctx: &ConversionContext) -> Result<String> {
-    let s = path.segments.last().unwrap().ident.to_string();
-    Ok(s)
-}
-
-// Convert a unary expression (e.g., negation) into an s-expression.
-fn convert_unary(u: &ExprUnary, ctx: &ConversionContext) -> Result<String> {
-    if let UnOp::Neg(_) = u.op {
-        let inner = expr_to_sexpr(&u.expr, ctx)?;
-        Ok(format!("(* -1 {})", inner))
-    } else {
-        Err(anyhow!("unsupported unary op"))
-    }
 }
 
 // ============================================================================
