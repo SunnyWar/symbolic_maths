@@ -10,6 +10,11 @@ fn test_sin_squared_plus_cos_squared_powi(_x: f32) -> f32 {
     _x.sin().powi(2) + _x.cos().powi(2)
 }
 
+#[sym_math]
+fn test_sin_squared_plus_cos_squared_powi_64(_x: f64) -> f64 {
+    _x.sin().powi(2) + _x.cos().powi(2)
+}
+
 #[test]
 fn test_trig_identity_with_powi() {
     // Should simplify to 1
